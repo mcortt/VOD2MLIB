@@ -1,4 +1,4 @@
-# VOD2MLIB — VOD → Media-Library .strm Generator (v1.7)
+# VOD2MLIB — VOD → Media-Library .strm Generator (v1.7.1)
 
 Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Plex, Jellyfin, Emby, Kodi) with optional NFO metadata, batch processing, and scheduled auto-rescan.
 
@@ -7,6 +7,11 @@ Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Pl
 - **Original author:** [shedunraid](https://github.com/shedunraid) — created v0.x–v1.3 ([upstream repo](https://github.com/shedunraid/VOD2MLIB)).
 - **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, and submission to the official Dispatcharr Plugins repo. The upstream has been dormant since early 2026; this fork continues maintenance.
 - Distributed under the MIT License.
+
+## What's New in v1.7.1
+
+- Action descriptions condensed to single-line so Run buttons stay right-aligned with their action title (Dispatcharr's UI drops buttons below when descriptions wrap).
+- `[Rescan] All (Movies + Series)` renamed to `[Rescan & Generate] All (Movies + Series)` to better reflect its dual nature: it both refreshes existing series and adds new ones.
 
 ## What's New in v1.7
 

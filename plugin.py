@@ -1,6 +1,6 @@
 """
 VOD2MLIB — VOD .strm Generator Plugin for Dispatcharr
-v1.7.0 — UI clarity: button styling + confirm dialogs + accurate descriptions, rescan_all forces refresh
+v1.7.1 — UI tweak: shorter action descriptions to keep buttons right-aligned; renamed Rescan All
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -18,7 +18,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.7.0"
+    version = "1.7.1"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files. "
         "Map a host folder to /VODS in your Dispatcharr container, then click "
@@ -134,7 +134,7 @@ class Plugin:
         {
             "id": "scan_all_vods",
             "label": "[Scan] Show catalogue totals",
-            "description": "Read-only. Counts unique Movies and Series in Dispatcharr's database. No files written.",
+            "description": "Count Movies and Series in Dispatcharr. Read-only.",
             "button_label": "Scan",
             "button_variant": "outline",
             "button_color": "blue",
@@ -142,7 +142,7 @@ class Plugin:
         {
             "id": "generate_movies",
             "label": "[Generate] Movie .strm files",
-            "description": "Process movies according to Batch Size. Existing .strm files are skipped — click again to continue from where the last batch ended.",
+            "description": "Process movies per Batch Size. Existing .strm files are skipped.",
             "button_label": "Generate Movies",
             "button_variant": "filled",
             "button_color": "green",
@@ -150,23 +150,23 @@ class Plugin:
         {
             "id": "generate_series",
             "label": "[Generate] Series .strm files",
-            "description": "Create .strm files for series episodes (3 parallel workers). Already-processed series are skipped unless 'Refresh Existing Series' is on, in which case missing episodes are added.",
+            "description": "Create episode .strm files. See 'Refresh Existing Series' setting.",
             "button_label": "Generate Series",
             "button_variant": "filled",
             "button_color": "green",
         },
         {
             "id": "rescan_all",
-            "label": "[Rescan] All (Movies + Series)",
-            "description": "Run scan, then generate movies, then series — with Refresh Existing forced ON regardless of the global setting. Same action that the cron schedule fires; safe to click manually for a full refresh.",
-            "button_label": "Rescan All",
+            "label": "[Rescan & Generate] All (Movies + Series)",
+            "description": "Scan + Generate Movies + Generate Series. Refresh Existing forced ON. What cron fires.",
+            "button_label": "Rescan & Generate",
             "button_variant": "filled",
             "button_color": "teal",
         },
         {
             "id": "schedule_status",
             "label": "[Schedule] Show status",
-            "description": "Show the registered cron expression, last run time, and total runs.",
+            "description": "Show registered cron, last run, and total runs.",
             "button_label": "Status",
             "button_variant": "outline",
             "button_color": "blue",
@@ -174,7 +174,7 @@ class Plugin:
         {
             "id": "apply_schedule",
             "label": "[Schedule] Apply",
-            "description": "Register or update a periodic auto-rescan task using the current cron and settings. The current settings are snapshotted at click-time — re-click after changing any setting to refresh the snapshot.",
+            "description": "Register/update the cron task. Re-click after changing any setting.",
             "button_label": "Apply",
             "button_variant": "outline",
             "button_color": "blue",
@@ -182,7 +182,7 @@ class Plugin:
         {
             "id": "remove_schedule",
             "label": "[Schedule] Remove",
-            "description": "Unregister the periodic auto-rescan task.",
+            "description": "Unregister the periodic task.",
             "button_label": "Remove",
             "button_variant": "outline",
             "button_color": "orange",
@@ -195,7 +195,7 @@ class Plugin:
         {
             "id": "cleanup_movies",
             "label": "[⚠️ Cleanup] Movies",
-            "description": "Remove .strm and .nfo files this plugin created from the movies root. User-added files (subtitles, posters, custom .nfo) are preserved; folders are removed only if empty.",
+            "description": "Remove plugin .strm/.nfo from Movies root. User files preserved.",
             "button_label": "Clean Up Movies",
             "button_variant": "filled",
             "button_color": "red",
@@ -208,7 +208,7 @@ class Plugin:
         {
             "id": "cleanup_series",
             "label": "[⚠️ Cleanup] Series",
-            "description": "Remove .strm and .nfo files this plugin created from the series root. User-added files preserved; empty Season folders and series folders are removed.",
+            "description": "Remove plugin .strm/.nfo from Series root. User files preserved.",
             "button_label": "Clean Up Series",
             "button_variant": "filled",
             "button_color": "red",
