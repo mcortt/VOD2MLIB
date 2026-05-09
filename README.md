@@ -1,4 +1,4 @@
-# VOD2MLIB — VOD → Media-Library .strm Generator (v1.7.1)
+# VOD2MLIB — VOD → Media-Library .strm Generator (v1.8.0)
 
 Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Plex, Jellyfin, Emby, Kodi) with optional NFO metadata, batch processing, and scheduled auto-rescan.
 
@@ -7,6 +7,24 @@ Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Pl
 - **Original author:** [shedunraid](https://github.com/shedunraid) — created v0.x–v1.3 ([upstream repo](https://github.com/shedunraid/VOD2MLIB)).
 - **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, and submission to the official Dispatcharr Plugins repo. The upstream has been dormant since early 2026; this fork continues maintenance.
 - Distributed under the MIT License.
+
+## What's New in v1.8.0
+
+Manifest-side UX pass — the most we can do without touching Dispatcharr's frontend.
+
+- **Settings tab now grouped.** Four `info`-type section dividers (`Paths & host`, `Movies`, `Series`, `Auto-rescan schedule`) split the previously flat field list into thematic blocks. The existing `About` block at the top stays.
+- **Action labels match the design's renaming map.** Sentence case throughout, with uppercase section prefixes:
+  - `Scan for VODs` → `[LIBRARY] Catalogue snapshot`
+  - `[Generate] Movie .strm files` → `[GENERATE] Movies`
+  - `[Generate] Series .strm files` → `[GENERATE] Series`
+  - `[Rescan & Generate] All` → `[GENERATE] Full rescan`
+  - `[Schedule] Apply` → `[SCHEDULE] Apply / Update`
+  - `[Schedule] Remove` → `[SCHEDULE] Unschedule`
+  - `[⚠️ Cleanup] Movies / Series` → `[⚠ DANGER] Clean up Movies / Series`
+- **Right-side button labels condensed** to single verbs: `Generate`, `Rescan all`, `Apply`, `Remove`, `Clean up`. Cleaner row visual.
+- **Rescan description trimmed** to fit one row at typical viewport widths.
+
+A full structural redesign (proper section headers as render-time UI, inline schedule status card, live-data meta chips) is out of scope for any plugin-side change — those require Dispatcharr frontend work. The current shape is the ceiling of what the plugin manifest alone can achieve.
 
 ## What's New in v1.7.1
 

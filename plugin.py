@@ -1,6 +1,6 @@
 """
 VOD2MLIB — VOD .strm Generator Plugin for Dispatcharr
-v1.7.1 — UI tweak: shorter action descriptions to keep buttons right-aligned; renamed Rescan All
+v1.8.0 — manifest-side UX pass: settings-tab section dividers + design-aligned action labels
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -18,7 +18,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.7.1"
+    version = "1.8.0"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files. "
         "Map a host folder to /VODS in your Dispatcharr container, then click "
@@ -33,21 +33,27 @@ class Plugin:
             "id": "_about",
             "label": "About",
             "type": "info",
-            "description": "Workflow:\n  1. Configure Root Folders + Dispatcharr URL below.\n  2. Actions tab → Scan → see catalogue totals.\n  3. Actions tab → Generate Movies / Generate Series (start with Batch Size 10 to verify).\n  4. (Optional) For nightly auto-updates: turn ON 'Refresh Existing Series', set the cron schedule, and click Apply Schedule.\n\nDocs and source: https://github.com/R3XCHRIS/VOD2MLIB",
+            "description": "Workflow:\n  1. Configure paths below.\n  2. Actions → Scan → see catalogue totals.\n  3. Actions → Generate Movies / Generate Series (start with Batch Size 10).\n  4. (Optional) Turn ON Refresh Existing Series, set cron, click Apply Schedule for nightly auto-rescan.\n\nDocs: https://github.com/R3XCHRIS/VOD2MLIB",
+        },
+        {
+            "id": "_section_paths",
+            "label": "── Paths & host ──",
+            "type": "info",
+            "description": "Where to write .strm files and how media servers reach Dispatcharr.",
         },
         {
             "id": "root_folder",
             "label": "Root Folder for Movies",
             "type": "string",
             "default": "/VODS/Movies",
-            "help_text": "Path where movie folders will be created"
+            "help_text": "Path inside the Dispatcharr container where movie folders will be created."
         },
         {
             "id": "series_root_folder",
             "label": "Root Folder for Series",
             "type": "string",
             "default": "/VODS/Series",
-            "help_text": "Path where series folders will be created"
+            "help_text": "Path inside the Dispatcharr container where series folders will be created."
         },
         {
             "id": "dispatcharr_url",
@@ -55,6 +61,12 @@ class Plugin:
             "type": "string",
             "default": "http://192.168.99.11:9191",
             "help_text": "⚠️ MUST be your actual IP address (not localhost)! This URL goes into .strm files and must be accessible from your media server."
+        },
+        {
+            "id": "_section_movies",
+            "label": "── Movies ──",
+            "type": "info",
+            "description": "Settings for the Generate Movies action.",
         },
         {
             "id": "batch_size",
@@ -77,6 +89,12 @@ class Plugin:
             "type": "boolean",
             "default": True,
             "help_text": "Create .nfo metadata files for movies"
+        },
+        {
+            "id": "_section_series",
+            "label": "── Series ──",
+            "type": "info",
+            "description": "Settings for the Generate Series action.",
         },
         {
             "id": "series_batch_size",
@@ -107,6 +125,12 @@ class Plugin:
             "help_text": "Re-evaluate series that already have folders, picking up new episodes added upstream. Turn ON for cron rescans."
         },
         {
+            "id": "_section_schedule",
+            "label": "── Auto-rescan schedule ──",
+            "type": "info",
+            "description": "Configure the cron job. Click Apply in the Actions tab to register or update.",
+        },
+        {
             "id": "schedule_cron",
             "label": "Auto-Rescan Schedule (cron)",
             "type": "string",
@@ -133,39 +157,39 @@ class Plugin:
     actions = [
         {
             "id": "scan_all_vods",
-            "label": "[Scan] Show catalogue totals",
-            "description": "Count Movies and Series in Dispatcharr. Read-only.",
+            "label": "[LIBRARY] Catalogue snapshot",
+            "description": "Count unique Movies and Series in the Dispatcharr database. Read-only.",
             "button_label": "Scan",
             "button_variant": "outline",
             "button_color": "blue",
         },
         {
             "id": "generate_movies",
-            "label": "[Generate] Movie .strm files",
+            "label": "[GENERATE] Movies",
             "description": "Process movies per Batch Size. Existing .strm files are skipped.",
-            "button_label": "Generate Movies",
+            "button_label": "Generate",
             "button_variant": "filled",
             "button_color": "green",
         },
         {
             "id": "generate_series",
-            "label": "[Generate] Series .strm files",
+            "label": "[GENERATE] Series",
             "description": "Create episode .strm files. See 'Refresh Existing Series' setting.",
-            "button_label": "Generate Series",
+            "button_label": "Generate",
             "button_variant": "filled",
             "button_color": "green",
         },
         {
             "id": "rescan_all",
-            "label": "[Rescan & Generate] All (Movies + Series)",
-            "description": "Scan + Generate Movies + Generate Series. Refresh Existing forced ON. What cron fires.",
-            "button_label": "Rescan & Generate",
+            "label": "[GENERATE] Full rescan",
+            "description": "Scan, then Movies, then Series — Refresh Existing forced ON. What cron fires.",
+            "button_label": "Rescan all",
             "button_variant": "filled",
             "button_color": "teal",
         },
         {
             "id": "schedule_status",
-            "label": "[Schedule] Show status",
+            "label": "[SCHEDULE] Show status",
             "description": "Show registered cron, last run, and total runs.",
             "button_label": "Status",
             "button_variant": "outline",
@@ -173,16 +197,16 @@ class Plugin:
         },
         {
             "id": "apply_schedule",
-            "label": "[Schedule] Apply",
-            "description": "Register/update the cron task. Re-click after changing any setting.",
+            "label": "[SCHEDULE] Apply / Update",
+            "description": "Register or update the cron task. Re-click after changing any setting.",
             "button_label": "Apply",
             "button_variant": "outline",
             "button_color": "blue",
         },
         {
             "id": "remove_schedule",
-            "label": "[Schedule] Remove",
-            "description": "Unregister the periodic task.",
+            "label": "[SCHEDULE] Unschedule",
+            "description": "Remove the periodic auto-rescan task.",
             "button_label": "Remove",
             "button_variant": "outline",
             "button_color": "orange",
@@ -194,9 +218,9 @@ class Plugin:
         },
         {
             "id": "cleanup_movies",
-            "label": "[⚠️ Cleanup] Movies",
-            "description": "Remove plugin .strm/.nfo from Movies root. User files preserved.",
-            "button_label": "Clean Up Movies",
+            "label": "[⚠ DANGER] Clean up Movies",
+            "description": "Delete plugin .strm/.nfo from Movies root. User files preserved.",
+            "button_label": "Clean up",
             "button_variant": "filled",
             "button_color": "red",
             "confirm": {
@@ -207,9 +231,9 @@ class Plugin:
         },
         {
             "id": "cleanup_series",
-            "label": "[⚠️ Cleanup] Series",
-            "description": "Remove plugin .strm/.nfo from Series root. User files preserved.",
-            "button_label": "Clean Up Series",
+            "label": "[⚠ DANGER] Clean up Series",
+            "description": "Delete plugin .strm/.nfo from Series root. User files preserved.",
+            "button_label": "Clean up",
             "button_variant": "filled",
             "button_color": "red",
             "confirm": {
