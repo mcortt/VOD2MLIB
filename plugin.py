@@ -1,6 +1,6 @@
 """
 VOD2MLIB — VOD .strm Generator Plugin for Dispatcharr
-v1.8.1 — full-rescan confirm dialog + tighter description
+v1.8.2 — settings-tab section headers use [BRACKET] style to match Actions tab
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -18,7 +18,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.8.1"
+    version = "1.8.2"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files. "
         "Map a host folder to /VODS in your Dispatcharr container, then click "
@@ -37,7 +37,7 @@ class Plugin:
         },
         {
             "id": "_section_paths",
-            "label": "── Paths & host ──",
+            "label": "[PATHS & HOSTS]",
             "type": "info",
             "description": "Where to write .strm files and how media servers reach Dispatcharr.",
         },
@@ -64,7 +64,7 @@ class Plugin:
         },
         {
             "id": "_section_movies",
-            "label": "── Movies ──",
+            "label": "[MOVIES]",
             "type": "info",
             "description": "Settings for the Generate Movies action.",
         },
@@ -92,7 +92,7 @@ class Plugin:
         },
         {
             "id": "_section_series",
-            "label": "── Series ──",
+            "label": "[SERIES]",
             "type": "info",
             "description": "Settings for the Generate Series action.",
         },
@@ -126,7 +126,7 @@ class Plugin:
         },
         {
             "id": "_section_schedule",
-            "label": "── Auto-rescan schedule ──",
+            "label": "[AUTO-RESCAN SCHEDULE]",
             "type": "info",
             "description": "Configure the cron job. Click Apply in the Actions tab to register or update.",
         },

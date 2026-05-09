@@ -1,6 +1,6 @@
 {
   "name": "VOD2MLIB",
-  "version": "1.8.1",
+  "version": "1.8.2",
   "description": "Generate .strm files for Dispatcharr VOD movies and series, with optional NFO metadata, batch processing, and scheduled auto-rescan that picks up newly-added episodes.",
   "author": "R3XCHRIS",
   "license": "MIT",
@@ -15,7 +15,7 @@
     },
     {
       "id": "_section_paths",
-      "label": "── Paths & host ──",
+      "label": "[PATHS & HOSTS]",
       "type": "info",
       "description": "Where to write .strm files and how media servers reach Dispatcharr."
     },
@@ -43,7 +43,7 @@
     },
     {
       "id": "_section_movies",
-      "label": "── Movies ──",
+      "label": "[MOVIES]",
       "type": "info",
       "description": "Settings for the Generate Movies action."
     },
@@ -72,7 +72,7 @@
     },
     {
       "id": "_section_series",
-      "label": "── Series ──",
+      "label": "[SERIES]",
       "type": "info",
       "description": "Settings for the Generate Series action."
     },
@@ -106,7 +106,7 @@
     },
     {
       "id": "_section_schedule",
-      "label": "── Auto-rescan schedule ──",
+      "label": "[AUTO-RESCAN SCHEDULE]",
       "type": "info",
       "description": "Configure the cron job. Click Apply in the Actions tab to register or update."
     },
