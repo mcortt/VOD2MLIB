@@ -16,7 +16,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.3.0"
+    version = "1.4.0"
     description = """• Convert Dispatcharr VODs to media library format (.strm files).        • SETUP: Map a host folder to /VODS in your Dispatcharr container (e.g., /mnt/media:/VODS).        • Configure root folders in plugin settings (/VODS/Movies and /VODS/Series by default).        • USAGE: Click 'Scan for VODs' to see totals.        • Use 'Generate Movie/Series .strm Files' with batch sizes (start small like 10 to test).        • Episodes auto-fetch per series as needed.        • Repeat clicks until complete - smart skip logic prevents duplicates.        • TIMING: Movies are fast (~30 sec per 250).        • Series OPTIMIZED: REAL THREADING! 50-70% faster with 3 parallel workers (10 series: 120s → ~50s)!        • Use batch of 1 for testing.        • NOTE: If you get errors, do a full browser refresh (Ctrl+F5 / Cmd+Shift+R) and try again.        • If you like this plugin please donate: https://paypal.me/shedunraid"""
     
     fields = [
