@@ -1,6 +1,6 @@
 """
 VOD2MLIB — VOD .strm Generator Plugin for Dispatcharr
-v1.5.0 — submission-ready manifest, bug fixes, safer cleanup
+v1.6.0 — rescan-friendly: per-episode skip, optional M3U re-fetch, refresh-existing toggle
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -18,7 +18,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.5.0"
+    version = "1.6.0"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files. "
         "Map a host folder to /VODS in your Dispatcharr container, then click "
@@ -92,6 +92,13 @@ class Plugin:
             "type": "boolean",
             "default": True,
             "help_text": "Create .nfo metadata files for series and episodes"
+        },
+        {
+            "id": "refresh_existing",
+            "label": "Refresh Existing Series (rescan-friendly)",
+            "type": "boolean",
+            "default": False,
+            "help_text": "Re-evaluate series that already have folders, picking up new episodes added upstream. Turn ON for cron rescans."
         },
         {
             "id": "schedule_cron",
@@ -464,6 +471,7 @@ class Plugin:
         dispatcharr_url = settings.get("dispatcharr_url", "http://192.168.99.11:9191").rstrip("/")
         batch_size = settings.get("series_batch_size") or "10"
         generate_nfo = settings.get("generate_series_nfo", True)
+        refresh_existing = bool(settings.get("refresh_existing", False))
 
         if "localhost" in dispatcharr_url.lower() or "127.0.0.1" in dispatcharr_url:
             return {"status": "error", "message": "Dispatcharr URL must be an actual IP address!"}
@@ -474,6 +482,7 @@ class Plugin:
         logger.info("  Dispatcharr URL: %s", dispatcharr_url)
         logger.info("  Batch Size: %s", batch_size)
         logger.info("  Generate NFO: %s", "Yes" if generate_nfo else "No")
+        logger.info("  Refresh Existing: %s", "Yes" if refresh_existing else "No")
         logger.info("  Threading: ENABLED (3 workers)")
         logger.info("")
 
@@ -505,26 +514,34 @@ class Plugin:
         except OSError as e:
             return {"status": "error", "message": f"Folder creation error: {e}"}
 
-        logger.info("Filtering already-processed series...")
-        unprocessed = []
+        if refresh_existing:
+            logger.info("Refresh-existing mode: scanning all series for new episodes...")
+        else:
+            logger.info("Filtering already-processed series...")
+        to_process = []
         scanned = 0
         for series_rel in query.iterator():
             scanned += 1
-            folder, _, _ = self._series_target_folder(series_rel.series, series_root)
-            if not self._series_already_processed(folder):
-                unprocessed.append(series_rel)
-                if batch_size != "all" and len(unprocessed) >= target_batch:
-                    break
+            if not refresh_existing:
+                folder, _, _ = self._series_target_folder(series_rel.series, series_root)
+                if self._series_already_processed(folder):
+                    continue
+            to_process.append(series_rel)
+            if batch_size != "all" and len(to_process) >= target_batch:
+                break
 
-        already_done = scanned - len(unprocessed)
-        logger.info("Scanned %d series; %d already processed; %d to process this run", scanned, already_done, len(unprocessed))
+        skipped_pre = scanned - len(to_process)
+        if refresh_existing:
+            logger.info("Scanned %d series; %d to evaluate this run", scanned, len(to_process))
+        else:
+            logger.info("Scanned %d series; %d already processed (skipped); %d to process this run", scanned, skipped_pre, len(to_process))
         logger.info("")
 
-        if not unprocessed:
-            logger.info("Nothing to do — every scanned series already has Season folders.")
+        if not to_process:
+            logger.info("Nothing to process.")
             return {
                 "status": "ok",
-                "message": f"Nothing to process; {already_done} series already done.",
+                "message": f"Nothing to process; {skipped_pre} series already done.",
                 "series_processed": 0,
                 "episodes_created": 0,
                 "nfo_created": 0,
@@ -535,9 +552,9 @@ class Plugin:
         created_nfo = 0
         errors = 0
         series_created = 0
-        skipped = 0
+        series_uptodate = 0
 
-        logger.info("Processing %d series with 3 parallel workers:", len(unprocessed))
+        logger.info("Processing %d series with 3 parallel workers:", len(to_process))
         logger.info("-" * 60)
 
         with ThreadPoolExecutor(max_workers=3) as executor:
@@ -549,8 +566,9 @@ class Plugin:
                     generate_nfo,
                     series_root,
                     logger,
+                    refresh_existing,
                 ): series_rel
-                for series_rel in unprocessed
+                for series_rel in to_process
             }
 
             for idx, future in enumerate(as_completed(futures), 1):
@@ -561,8 +579,8 @@ class Plugin:
                     errors += 1
                     continue
 
-                if result.get("skipped"):
-                    skipped += 1
+                if result.get("uptodate"):
+                    series_uptodate += 1
                 elif result.get("created"):
                     series_created += 1
                     created_strm += result["episodes"]
@@ -574,53 +592,59 @@ class Plugin:
         logger.info("")
         logger.info("=" * 60)
         logger.info("SUMMARY:")
-        logger.info("  Series created: %d", series_created)
-        logger.info("  Series skipped: %d", skipped)
-        logger.info("  Episodes created: %d", created_strm)
+        logger.info("  Series with new content: %d", series_created)
+        logger.info("  Series up-to-date:       %d", series_uptodate)
+        logger.info("  New episode .strm files: %d", created_strm)
         if generate_nfo:
-            logger.info("  NFO files created: %d", created_nfo)
-        logger.info("  Errors: %d", errors)
+            logger.info("  New NFO files:           %d", created_nfo)
+        logger.info("  Errors:                  %d", errors)
         logger.info("=" * 60)
-        
-        summary_msg = f"Created {series_created} series with {created_strm} episodes"
-        if generate_nfo:
-            summary_msg += f" + {created_nfo} NFO files"
-        
+
+        if series_created == 0 and series_uptodate > 0:
+            summary_msg = f"All {series_uptodate} evaluated series already up-to-date — no new episodes."
+        else:
+            summary_msg = f"Wrote {created_strm} new episodes across {series_created} series"
+            if series_uptodate:
+                summary_msg += f" ({series_uptodate} already up-to-date)"
+            if generate_nfo and created_nfo:
+                summary_msg += f" + {created_nfo} NFO"
+
         return {
             "status": "ok",
             "message": summary_msg,
             "series_processed": series_created,
+            "series_uptodate": series_uptodate,
             "episodes_created": created_strm,
             "nfo_created": created_nfo if generate_nfo else 0,
-            "errors": errors
+            "errors": errors,
         }
     
-    def _process_single_series(self, series_rel, dispatcharr_url, generate_nfo, series_root, logger):
-        """Process a single series - fetches episodes and creates files (thread-safe)."""
+    def _process_single_series(self, series_rel, dispatcharr_url, generate_nfo, series_root, logger, refresh_existing=False):
+        """Process a single series. Idempotent: writes only missing episode files.
+
+        With refresh_existing=False, callers should pre-filter already-done
+        series for performance. With refresh_existing=True, every series is
+        re-evaluated and the M3U source is re-fetched so newly-aired episodes
+        are picked up.
+        """
         from apps.vod.models import M3UEpisodeRelation
         from apps.vod.tasks import refresh_series_episodes
 
         series = series_rel.series
         series_folder, series_name, _year = self._series_target_folder(series, series_root)
 
-        if self._series_already_processed(series_folder):
-            return {
-                "created": False,
-                "skipped": True,
-                "series_name": series_name,
-                "episodes": 0,
-                "nfo_files": 0,
-                "message": f"{series_name} - Already processed",
-            }
-
         try:
             custom_props = series_rel.custom_properties or {}
-            if not custom_props.get('episodes_fetched', False):
-                refresh_series_episodes(
-                    account=series_rel.m3u_account,
-                    series=series_rel.series,
-                    external_series_id=series_rel.external_series_id,
-                )
+            should_refetch = refresh_existing or not custom_props.get('episodes_fetched', False)
+            if should_refetch:
+                try:
+                    refresh_series_episodes(
+                        account=series_rel.m3u_account,
+                        series=series_rel.series,
+                        external_series_id=series_rel.external_series_id,
+                    )
+                except Exception as fetch_err:
+                    logger.warning("refresh_series_episodes failed for %s: %s", series_name, fetch_err)
 
             episodes = list(
                 M3UEpisodeRelation.objects.filter(
@@ -635,81 +659,88 @@ class Plugin:
             if episode_count == 0:
                 return {
                     "created": False,
-                    "skipped": False,
+                    "uptodate": False,
                     "series_name": series_name,
                     "episodes": 0,
                     "nfo_files": 0,
-                    "message": f"{series_name} - No episodes found"
+                    "message": f"{series_name} - No episodes found",
                 }
-            
-            # Create series folder
+
             os.makedirs(series_folder, exist_ok=True)
-            
-            nfo_count = 0
-            
-            # Generate tvshow.nfo if enabled
+
+            new_episodes = 0
+            new_nfo = 0
+
             if generate_nfo:
                 tvshow_nfo_path = os.path.join(series_folder, "tvshow.nfo")
-                category_name = series_rel.category.name if series_rel.category else ""
-                tvshow_content = self._generate_tvshow_nfo(series, category_name)
-                with open(tvshow_nfo_path, 'w', encoding='utf-8') as f:
-                    f.write(tvshow_content)
-                nfo_count += 1
-            
-            # Process episodes by season
+                if refresh_existing or not os.path.isfile(tvshow_nfo_path):
+                    category_name = series_rel.category.name if series_rel.category else ""
+                    tvshow_content = self._generate_tvshow_nfo(series, category_name)
+                    with open(tvshow_nfo_path, 'w', encoding='utf-8') as f:
+                        f.write(tvshow_content)
+                    new_nfo += 1
+
             for episode_rel in episodes:
                 episode = episode_rel.episode
                 season_num = episode.season_number or 0
                 episode_num = episode.episode_number or 0
-                
-                # Create season folder
+
                 season_folder_name = f"Season {season_num:02d}"
                 season_folder = os.path.join(series_folder, season_folder_name)
-                os.makedirs(season_folder, exist_ok=True)
-                
-                # Build episode filename
+
                 episode_title = episode.name or ""
                 if episode_title:
                     clean_title = self._clean_title(episode_title)
                     filename = f"{series_name} - S{season_num:02d}E{episode_num:02d} - {clean_title}"
                 else:
                     filename = f"{series_name} - S{season_num:02d}E{episode_num:02d}"
-                
                 filename = self._sanitize_filename(filename)
-                
-                # Create .strm file
+
                 strm_path = os.path.join(season_folder, f"{filename}.strm")
+                if os.path.isfile(strm_path):
+                    continue
+
+                os.makedirs(season_folder, exist_ok=True)
                 proxy_url = f"{dispatcharr_url}/proxy/vod/episode/{episode.uuid}?stream_id={episode_rel.stream_id}"
-                
                 with open(strm_path, 'w', encoding='utf-8') as f:
                     f.write(proxy_url)
-                
-                # Create episode .nfo if enabled
+                new_episodes += 1
+
                 if generate_nfo:
                     nfo_path = os.path.join(season_folder, f"{filename}.nfo")
-                    episode_nfo_content = self._generate_episode_nfo(episode)
-                    with open(nfo_path, 'w', encoding='utf-8') as f:
-                        f.write(episode_nfo_content)
-                    nfo_count += 1
-            
+                    if not os.path.isfile(nfo_path):
+                        with open(nfo_path, 'w', encoding='utf-8') as f:
+                            f.write(self._generate_episode_nfo(episode))
+                        new_nfo += 1
+
+            if new_episodes == 0:
+                return {
+                    "created": False,
+                    "uptodate": True,
+                    "series_name": series_name,
+                    "episodes": 0,
+                    "nfo_files": new_nfo,
+                    "message": f"{series_name} - up-to-date ({episode_count} episodes on disk)",
+                }
+
             return {
                 "created": True,
-                "skipped": False,
+                "uptodate": False,
                 "series_name": series_name,
-                "episodes": episode_count,
-                "nfo_files": nfo_count,
-                "message": f"{series_name} - ✓ Created {episode_count} episodes"
+                "episodes": new_episodes,
+                "nfo_files": new_nfo,
+                "message": f"{series_name} - +{new_episodes} new episode{'s' if new_episodes != 1 else ''}",
             }
-            
+
         except Exception as e:
             return {
                 "created": False,
-                "skipped": False,
+                "uptodate": False,
                 "series_name": series_name,
                 "episodes": 0,
                 "nfo_files": 0,
                 "error": str(e),
-                "message": f"{series_name} - ✗ Error: {e}"
+                "message": f"{series_name} - ✗ Error: {e}",
             }
     
     _PLUGIN_FILE_SUFFIXES = ('.strm', '.nfo')

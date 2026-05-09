@@ -1,7 +1,7 @@
 {
   "name": "VOD2MLIB",
-  "version": "1.5.0",
-  "description": "Generate .strm files for Dispatcharr VOD movies and series, with optional NFO metadata, batch processing, and scheduled auto-rescan.",
+  "version": "1.6.0",
+  "description": "Generate .strm files for Dispatcharr VOD movies and series, with optional NFO metadata, batch processing, and scheduled auto-rescan that picks up newly-added episodes.",
   "author": "R3XCHRIS",
   "license": "MIT",
   "min_dispatcharr_version": "v0.24.0",
@@ -72,6 +72,13 @@
       "type": "boolean",
       "default": true,
       "help_text": "Create tvshow.nfo and per-episode .nfo metadata files."
+    },
+    {
+      "id": "refresh_existing",
+      "label": "Refresh Existing Series (rescan-friendly)",
+      "type": "boolean",
+      "default": false,
+      "help_text": "Re-evaluate series that already have folders, picking up new episodes added upstream. Off = fast manual iteration (skip done series); On = scan everything for new content. Turn ON before clicking Apply Schedule for cron rescans."
     },
     {
       "id": "schedule_cron",

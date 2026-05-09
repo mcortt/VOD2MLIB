@@ -1,4 +1,4 @@
-# VOD2MLIB — VOD → Media-Library .strm Generator (v1.5)
+# VOD2MLIB — VOD → Media-Library .strm Generator (v1.6)
 
 Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Plex, Jellyfin, Emby, Kodi) with optional NFO metadata, batch processing, and scheduled auto-rescan.
 
@@ -7,6 +7,25 @@ Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Pl
 - **Original author:** [shedunraid](https://github.com/shedunraid) — created v0.x–v1.3 ([upstream repo](https://github.com/shedunraid/VOD2MLIB)).
 - **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, and submission to the official Dispatcharr Plugins repo. The upstream has been dormant since early 2026; this fork continues maintenance.
 - Distributed under the MIT License.
+
+## What's New in v1.6
+
+- **Rescan-friendly series processing.** Series no longer skip wholesale once their folder exists — episodes are checked individually and only missing `.strm` files are written. New episodes added upstream are picked up on the next run.
+- **New setting: `Refresh Existing Series`** (boolean, default off). When ON, the plugin re-fetches the episode list from the M3U source for every series and re-evaluates already-processed series. Turn this ON before clicking **Apply Schedule** so cron rescans actually find new content.
+- **`tvshow.nfo` refresh:** with `Refresh Existing Series` ON, the plugin re-writes `tvshow.nfo` so metadata edits (plot, genre) propagate.
+- **Cleaner result messages**: per-series log now shows `+3 new episodes` or `up-to-date (24 episodes on disk)`. Run summary differentiates "series with new content" vs "series up-to-date".
+- **Fault tolerance**: the M3U re-fetch (which talks to your IPTV provider) is wrapped in try/except so a single failed series doesn't kill the rest of the batch.
+
+### Recommended schedule setup
+
+1. Turn ON **Refresh Existing Series**.
+2. Set **Batch Size (Series)** to **All series** (or a high number).
+3. Set **Auto-Rescan Schedule** (default `0 3 * * *` = 03:00 daily).
+4. Set **Scheduled Action** to **Full rescan (movies + series)**.
+5. Click **Apply Schedule**. The current settings are snapshotted into the periodic task.
+6. Verify via **Show Schedule Status**.
+
+The first scheduled run after upgrading to v1.6 may take longer than usual because every series is re-evaluated. Subsequent runs are fast — most series come back as "up-to-date" without writing files.
 
 ## What's New in v1.5
 
