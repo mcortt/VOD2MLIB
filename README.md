@@ -1,6 +1,22 @@
-# VOD .strm Generator v1.3
+# VOD .strm Generator v1.4
 
-Simple extension of v0.1 with configurable batch sizes.
+Simple extension of v0.1 with configurable batch sizes and scheduled auto-rescan.
+
+## What's New in v1.4
+
+- **Rescan All action**: One-click full rescan that runs scan + movies + series in sequence.
+- **Scheduled Auto-Rescan (cron)**: Register a periodic task using a standard 5-field cron expression (default `0 3 * * *` = daily at 3 AM). Uses `django-celery-beat`.
+- **Schedule manager actions**: `Apply Schedule`, `Remove Schedule`, `Show Schedule Status`.
+
+### Setting up the schedule
+
+1. Set **Auto-Rescan Schedule (cron)** to your desired expression (e.g. `0 3 * * *`).
+2. Set **Scheduled Action** to what you want it to run (default: full rescan).
+3. Click **Apply Schedule**. The plugin snapshots your *current* settings into the periodic task — if you later change `root_folder`, `dispatcharr_url`, batch sizes, or NFO toggles, click **Apply Schedule** again to refresh the snapshot.
+4. Use **Show Schedule Status** to verify the task is registered, see the cron expression, last run, and run count.
+5. **Remove Schedule** unregisters the periodic task.
+
+Requires `django-celery-beat` and a running Celery beat scheduler in your Dispatcharr deployment. If `django-celery-beat` isn't available, the manager actions log a clear message and you can fall back to a host-side cron job hitting the Dispatcharr plugin action API.
 
 ## What's New in v1.1
 

@@ -1,6 +1,6 @@
 """
 VOD .strm Generator Plugin for Dispatcharr
-v1.3.0 - Real concurrent threading for series processing
+v1.4.0 - Adds scheduled auto-rescan (cron) and a combined rescan-all action
 
 MIT License
 Copyright (c) 2025-2026 shedunraid
@@ -83,8 +83,30 @@ class Plugin:
             "type": "checkbox",
             "default": True,
             "help_text": "Create .nfo metadata files for series and episodes"
+        },
+        {
+            "id": "schedule_cron",
+            "label": "Auto-Rescan Schedule (cron)",
+            "type": "string",
+            "default": "0 3 * * *",
+            "help_text": "Standard 5-field cron: 'minute hour day-of-month month day-of-week'. Default '0 3 * * *' = every day at 03:00. Used by 'Apply Schedule'."
+        },
+        {
+            "id": "schedule_target",
+            "label": "Scheduled Action",
+            "type": "select",
+            "default": "rescan_all",
+            "options": [
+                {"value": "scan_all_vods", "label": "Scan only (totals)"},
+                {"value": "generate_movies", "label": "Movies only"},
+                {"value": "generate_series", "label": "Series only"},
+                {"value": "rescan_all", "label": "Full rescan (movies + series)"}
+            ],
+            "help_text": "Which action the scheduler should run on each tick."
         }
     ]
+
+    SCHEDULE_TASK_NAME = "vod2mlib.auto_rescan"
     
     actions = [
         {
@@ -111,6 +133,26 @@ class Plugin:
             "id": "cleanup_series",
             "label": "Clean Up Series",
             "description": "⚠️ Remove all series folders and .strm files"
+        },
+        {
+            "id": "rescan_all",
+            "label": "Rescan All (Movies + Series)",
+            "description": "One-shot full rescan: scan totals, then generate movies, then series. This is what the cron schedule calls."
+        },
+        {
+            "id": "apply_schedule",
+            "label": "Apply Schedule",
+            "description": "Register/update the periodic auto-rescan task using the cron expression in settings."
+        },
+        {
+            "id": "remove_schedule",
+            "label": "Remove Schedule",
+            "description": "Unregister the periodic auto-rescan task."
+        },
+        {
+            "id": "schedule_status",
+            "label": "Show Schedule Status",
+            "description": "Show whether a scheduled rescan is registered, and what cron expression it uses."
         }
     ]
     
@@ -134,7 +176,15 @@ class Plugin:
             return self._cleanup_movies(settings, logger)
         elif action == "cleanup_series":
             return self._cleanup_series(settings, logger)
-        
+        elif action == "rescan_all":
+            return self._rescan_all(settings, logger)
+        elif action == "apply_schedule":
+            return self._apply_schedule(settings, logger)
+        elif action == "remove_schedule":
+            return self._remove_schedule(settings, logger)
+        elif action == "schedule_status":
+            return self._schedule_status(settings, logger)
+
         return {"status": "error", "message": f"Unknown action: {action}"}
     
     def _scan_all_vods(self, settings: Dict[str, Any], logger):
@@ -1061,5 +1111,173 @@ class Plugin:
         
         # Remove trailing dots/spaces (Windows issue)
         name = name.rstrip('. ')
-        
+
         return name or "Unknown"
+
+    def _rescan_all(self, settings: Dict[str, Any], logger):
+        """Combined scan + generate movies + generate series. Used by the cron schedule."""
+        logger.info("Combined rescan: scan + movies + series")
+        logger.info("")
+
+        scan = self._scan_all_vods(settings, logger)
+        if scan.get("status") != "ok":
+            return scan
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("Rescan: movies")
+        logger.info("=" * 60)
+        movies = self._generate_movies(settings, logger)
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("Rescan: series")
+        logger.info("=" * 60)
+        series = self._generate_series(settings, logger)
+
+        movie_msg = movies.get("message", "movies skipped")
+        series_msg = series.get("message", "series skipped")
+
+        return {
+            "status": "ok",
+            "message": f"Rescan complete — {movie_msg}; {series_msg}",
+            "scan": scan,
+            "movies": movies,
+            "series": series,
+        }
+
+    def _parse_cron(self, cron_expr: str):
+        """Validate and split a 5-field cron expression. Returns tuple or raises ValueError."""
+        if not cron_expr:
+            raise ValueError("Cron expression is empty")
+        parts = cron_expr.strip().split()
+        if len(parts) != 5:
+            raise ValueError(
+                f"Cron expression must have 5 fields (minute hour dom month dow), got {len(parts)}: {cron_expr!r}"
+            )
+        return tuple(parts)
+
+    def _apply_schedule(self, settings: Dict[str, Any], logger):
+        """Register or update a periodic auto-rescan task via django-celery-beat."""
+        cron_expr = settings.get("schedule_cron") or "0 3 * * *"
+        target = settings.get("schedule_target") or "rescan_all"
+
+        valid_targets = {"scan_all_vods", "generate_movies", "generate_series", "rescan_all"}
+        if target not in valid_targets:
+            return {"status": "error", "message": f"Invalid schedule_target: {target}"}
+
+        try:
+            minute, hour, dom, month, dow = self._parse_cron(cron_expr)
+        except ValueError as e:
+            logger.error("Invalid cron expression: %s", e)
+            return {"status": "error", "message": str(e)}
+
+        try:
+            from django_celery_beat.models import PeriodicTask, CrontabSchedule
+        except ImportError as e:
+            logger.error("django-celery-beat is not installed: %s", e)
+            logger.error("")
+            logger.error("Fallback: add a host-side cron entry that POSTs to Dispatcharr's plugin")
+            logger.error("action endpoint to trigger '%s' on plugin '%s'.", target, self.name)
+            return {
+                "status": "error",
+                "message": "django-celery-beat not available. Use host cron to call the plugin action instead.",
+            }
+
+        import json
+        schedule, _ = CrontabSchedule.objects.get_or_create(
+            minute=minute,
+            hour=hour,
+            day_of_month=dom,
+            month_of_year=month,
+            day_of_week=dow,
+        )
+
+        snapshot = {k: v for k, v in (settings or {}).items() if not k.startswith("schedule_")}
+
+        task, created = PeriodicTask.objects.update_or_create(
+            name=self.SCHEDULE_TASK_NAME,
+            defaults={
+                "crontab": schedule,
+                "task": "vod2mlib.scheduled_rescan",
+                "kwargs": json.dumps({"action": target, "settings": snapshot}),
+                "enabled": True,
+                "description": f"Auto-rescan for {self.name} v{self.version}",
+            },
+        )
+
+        verb = "Created" if created else "Updated"
+        logger.info("%s schedule: %s @ '%s' → action '%s'", verb, self.SCHEDULE_TASK_NAME, cron_expr, target)
+        logger.info("Settings snapshot keys: %s", sorted(snapshot.keys()))
+        logger.info("")
+        logger.info("Note: re-run 'Apply Schedule' after changing settings to refresh the snapshot.")
+
+        return {
+            "status": "ok",
+            "message": f"{verb} periodic task '{self.SCHEDULE_TASK_NAME}' for cron '{cron_expr}' → {target}",
+            "created": created,
+            "cron": cron_expr,
+            "target": target,
+        }
+
+    def _remove_schedule(self, settings: Dict[str, Any], logger):
+        """Unregister the periodic auto-rescan task."""
+        try:
+            from django_celery_beat.models import PeriodicTask
+        except ImportError:
+            return {"status": "ok", "message": "django-celery-beat not installed; nothing to remove."}
+
+        deleted, _ = PeriodicTask.objects.filter(name=self.SCHEDULE_TASK_NAME).delete()
+        if deleted:
+            logger.info("Removed periodic task '%s'", self.SCHEDULE_TASK_NAME)
+        else:
+            logger.info("No periodic task named '%s' was registered.", self.SCHEDULE_TASK_NAME)
+        return {"status": "ok", "message": f"Removed {deleted} scheduled task(s).", "deleted": deleted}
+
+    def _schedule_status(self, settings: Dict[str, Any], logger):
+        """Show current schedule registration."""
+        try:
+            from django_celery_beat.models import PeriodicTask
+        except ImportError:
+            logger.info("django-celery-beat is not installed — scheduling disabled.")
+            return {"status": "ok", "scheduled": False, "reason": "django-celery-beat not installed"}
+
+        task = PeriodicTask.objects.filter(name=self.SCHEDULE_TASK_NAME).first()
+        if not task:
+            logger.info("No schedule registered. Click 'Apply Schedule' to enable auto-rescan.")
+            return {"status": "ok", "scheduled": False}
+
+        cron = task.crontab
+        cron_str = (
+            f"{cron.minute} {cron.hour} {cron.day_of_month} {cron.month_of_year} {cron.day_of_week}"
+            if cron else "<none>"
+        )
+        logger.info("Schedule: %s", task.name)
+        logger.info("  Enabled:    %s", task.enabled)
+        logger.info("  Cron:       %s", cron_str)
+        logger.info("  Task:       %s", task.task)
+        logger.info("  Kwargs:     %s", task.kwargs)
+        logger.info("  Last run:   %s", task.last_run_at)
+        logger.info("  Total runs: %s", task.total_run_count)
+        return {
+            "status": "ok",
+            "scheduled": True,
+            "enabled": task.enabled,
+            "cron": cron_str,
+            "task": task.task,
+            "last_run_at": str(task.last_run_at) if task.last_run_at else None,
+            "total_run_count": task.total_run_count,
+        }
+
+
+try:
+    from celery import shared_task as _vod2mlib_shared_task
+
+    @_vod2mlib_shared_task(name="vod2mlib.scheduled_rescan")
+    def _vod2mlib_scheduled_rescan(action="rescan_all", settings=None):
+        """Celery entry point invoked by the periodic task registered via _apply_schedule."""
+        import logging
+        logger = logging.getLogger("vod2mlib.schedule")
+        return Plugin().run(action, {}, {"logger": logger, "settings": settings or {}})
+except Exception:
+    pass
