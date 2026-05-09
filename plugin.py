@@ -1205,28 +1205,39 @@ class Plugin:
         try:
             from django_celery_beat.models import PeriodicTask
         except ImportError:
-            logger.info("django-celery-beat is not installed — scheduling disabled.")
-            return {"status": "ok", "scheduled": False, "reason": "django-celery-beat not installed"}
+            msg = "django-celery-beat is not installed — scheduling disabled."
+            logger.info(msg)
+            return {"status": "ok", "message": msg, "scheduled": False, "reason": "django-celery-beat not installed"}
 
         task = PeriodicTask.objects.filter(name=self.SCHEDULE_TASK_NAME).first()
         if not task:
-            logger.info("No schedule registered. Click 'Apply Schedule' to enable auto-rescan.")
-            return {"status": "ok", "scheduled": False}
+            msg = "No schedule registered. Click 'Apply Schedule' to enable auto-rescan."
+            logger.info(msg)
+            return {"status": "ok", "message": msg, "scheduled": False}
 
         cron = task.crontab
         cron_str = (
             f"{cron.minute} {cron.hour} {cron.day_of_month} {cron.month_of_year} {cron.day_of_week}"
             if cron else "<none>"
         )
+        last_run = str(task.last_run_at) if task.last_run_at else "never"
+        state = "enabled" if task.enabled else "disabled"
+
         logger.info("Schedule: %s", task.name)
         logger.info("  Enabled:    %s", task.enabled)
         logger.info("  Cron:       %s", cron_str)
         logger.info("  Task:       %s", task.task)
         logger.info("  Kwargs:     %s", task.kwargs)
-        logger.info("  Last run:   %s", task.last_run_at)
+        logger.info("  Last run:   %s", last_run)
         logger.info("  Total runs: %s", task.total_run_count)
+
+        message = (
+            f"Schedule {state} — cron '{cron_str}', "
+            f"last run {last_run}, total runs {task.total_run_count}"
+        )
         return {
             "status": "ok",
+            "message": message,
             "scheduled": True,
             "enabled": task.enabled,
             "cron": cron_str,
