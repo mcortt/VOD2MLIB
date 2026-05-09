@@ -9,9 +9,29 @@ import sys
 # Make the repo root importable so `import plugin` resolves to plugin.py.
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import logging
+
 import pytest
 
 from plugin import Plugin
+
+
+class CapturingLogger:
+    """A tiny stand-in that records warnings without needing the logging stack."""
+
+    def __init__(self):
+        self.warnings = []
+        self.errors = []
+        self.infos = []
+
+    def warning(self, *args, **kwargs):
+        self.warnings.append(args[0] if args else "")
+
+    def error(self, *args, **kwargs):
+        self.errors.append(args[0] if args else "")
+
+    def info(self, *args, **kwargs):
+        self.infos.append(args[0] if args else "")
 
 
 @pytest.fixture
@@ -211,6 +231,67 @@ class TestValidScheduleTargets:
         # Should NOT contain non-target actions
         assert "cleanup_movies" not in targets
         assert "apply_schedule" not in targets
+
+
+# ---------- _validate_dispatcharr_url ----------
+
+class TestValidateDispatcharrUrl:
+    def test_valid_lan_url(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url("http://192.168.1.10:9191", log)
+        assert ok is True
+        assert err is None
+        assert log.warnings == []
+
+    def test_empty_string_rejected(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url("", log)
+        assert ok is False
+        assert "empty" in err.lower()
+
+    def test_whitespace_only_rejected(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url("   ", log)
+        assert ok is False
+        assert "empty" in err.lower()
+
+    def test_none_rejected(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url(None, log)
+        assert ok is False
+        assert "empty" in err.lower()
+
+    def test_placeholder_rejected(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url(p.PLACEHOLDER_DISPATCHARR_URL, log)
+        assert ok is False
+        assert "placeholder" in err.lower()
+
+    def test_localhost_warns_but_passes(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url("http://localhost:9191", log)
+        assert ok is True
+        assert err is None
+        assert len(log.warnings) == 1
+        assert "localhost" in log.warnings[0].lower()
+
+    def test_127_0_0_1_warns_but_passes(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url("http://127.0.0.1:9191", log)
+        assert ok is True
+        assert len(log.warnings) == 1
+
+    def test_localhost_with_path(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url("http://localhost:9191/proxy", log)
+        assert ok is True
+        assert len(log.warnings) == 1
+
+    def test_real_url_no_warning(self, p):
+        log = CapturingLogger()
+        ok, err = p._validate_dispatcharr_url("https://dispatcharr.example.com", log)
+        assert ok is True
+        assert log.warnings == []
 
 
 # ---------- _movie_target_paths ----------

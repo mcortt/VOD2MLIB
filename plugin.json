@@ -1,6 +1,6 @@
 {
   "name": "VOD to Media Library",
-  "version": "1.9.3",
+  "version": "1.9.4",
   "description": "VOD → media library bridge. Generates .strm + NFO files from Dispatcharr's VOD catalogue, with optional cron-driven auto-rescan that picks up newly-added episodes.",
   "author": "R3XCHRIS",
   "license": "MIT",
@@ -35,11 +35,11 @@
     },
     {
       "id": "dispatcharr_url",
-      "label": "Dispatcharr URL",
+      "label": "Dispatcharr URL (REQUIRED)",
       "type": "string",
       "default": "",
       "placeholder": "http://192.168.1.10:9191",
-      "help_text": "Full URL to your Dispatcharr instance (NOT localhost). Baked into .strm files, so it must be reachable from your media server."
+      "help_text": "Required. The externally-reachable URL of your Dispatcharr instance — this gets baked into every .strm file, so it must resolve from wherever your media server runs. localhost works ONLY if the media server is on the same host with shared network namespace; otherwise use a routable LAN IP/hostname. Don't forget to click Save."
     },
     {
       "id": "_section_movies",

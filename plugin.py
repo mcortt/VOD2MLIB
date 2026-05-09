@@ -1,7 +1,7 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.9.3 — replace logo.png with user-provided pixel-art artwork
+v1.9.4 — reject placeholder URL; downgrade localhost-reject to warning
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -19,7 +19,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.9.3"
+    version = "1.9.4"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
         "optional NFO metadata, batch processing, and a cron-driven auto-rescan."
@@ -34,6 +34,11 @@ class Plugin:
     # Schedule task identity (django-celery-beat row name + Celery task name)
     SCHEDULE_TASK_NAME = "vod2mlib.auto_rescan"
     SCHEDULED_TASK_CELERY_NAME = "vod2mlib.scheduled_rescan"
+
+    # The legacy default Dispatcharr URL — a placeholder that must NOT be
+    # shipped into .strm files. We reject it explicitly to catch users who
+    # forgot to click Save after editing the URL field.
+    PLACEHOLDER_DISPATCHARR_URL = "http://192.168.99.11:9191"
 
     # File suffixes the plugin writes (used by cleanup and skip logic)
     _PLUGIN_FILE_SUFFIXES = ('.strm', '.nfo')
@@ -71,10 +76,11 @@ class Plugin:
         },
         {
             "id": "dispatcharr_url",
-            "label": "Dispatcharr URL (IMPORTANT!)",
+            "label": "Dispatcharr URL (REQUIRED)",
             "type": "string",
-            "default": "http://192.168.99.11:9191",
-            "help_text": "⚠️ MUST be your actual IP address (not localhost)! This URL goes into .strm files and must be accessible from your media server."
+            "default": "",
+            "placeholder": "http://192.168.1.10:9191",
+            "help_text": "Required. The externally-reachable URL of your Dispatcharr instance — this gets baked into every .strm file, so it must resolve from wherever your media server runs. localhost works ONLY if the media server is on the same host with shared network namespace; otherwise use a routable LAN IP/hostname. Don't forget to click Save."
         },
         {
             "id": "_section_movies",
@@ -365,16 +371,14 @@ class Plugin:
         as soon as target_batch new files have been written.
         """
         root_folder = settings.get("root_folder", "/VODS/Movies")
-        dispatcharr_url = settings.get("dispatcharr_url", "http://192.168.99.11:9191").rstrip("/")
+        dispatcharr_url = (settings.get("dispatcharr_url") or "").rstrip("/")
         batch_size = settings.get("batch_size") or "250"
         generate_nfo = settings.get("generate_nfo", True)
 
-        if "localhost" in dispatcharr_url.lower() or "127.0.0.1" in dispatcharr_url:
-            logger.error("Dispatcharr URL is localhost/127.0.0.1 — won't work for media servers.")
-            return {
-                "status": "error",
-                "message": "Dispatcharr URL must be a reachable IP/hostname, not localhost."
-            }
+        ok, err = self._validate_dispatcharr_url(dispatcharr_url, logger)
+        if not ok:
+            logger.error(err)
+            return {"status": "error", "message": err}
 
         self._log_config(logger, {
             "Root Folder": root_folder,
@@ -510,13 +514,15 @@ class Plugin:
     def _generate_series(self, settings: Dict[str, Any], logger):
         """Generate series .strm files with episodes using parallel processing."""
         series_root = settings.get("series_root_folder", "/VODS/Series")
-        dispatcharr_url = settings.get("dispatcharr_url", "http://192.168.99.11:9191").rstrip("/")
+        dispatcharr_url = (settings.get("dispatcharr_url") or "").rstrip("/")
         batch_size = settings.get("series_batch_size") or "10"
         generate_nfo = settings.get("generate_series_nfo", True)
         refresh_existing = bool(settings.get("refresh_existing", False))
 
-        if "localhost" in dispatcharr_url.lower() or "127.0.0.1" in dispatcharr_url:
-            return {"status": "error", "message": "Dispatcharr URL must be an actual IP address!"}
+        ok, err = self._validate_dispatcharr_url(dispatcharr_url, logger)
+        if not ok:
+            logger.error(err)
+            return {"status": "error", "message": err}
 
         self._log_config(logger, {
             "Series Root": series_root,
@@ -839,6 +845,37 @@ class Plugin:
         for k, v in items.items():
             logger.info("  %s: %s", k, v)
         logger.info("")
+
+    def _validate_dispatcharr_url(self, url: str, logger):
+        """Validate the configured Dispatcharr URL before writing .strm files.
+
+        Returns (ok, error_message). On ok=True a non-fatal warning may have
+        been logged for localhost-style URLs (which work in narrow setups
+        but break the typical case). On ok=False the caller should abort
+        the action and surface error_message to the user.
+        """
+        url_clean = (url or "").strip()
+        if not url_clean:
+            return False, (
+                "Dispatcharr URL is empty. Set it in the plugin Settings "
+                "(and click Save) before running this action."
+            )
+        if url_clean == self.PLACEHOLDER_DISPATCHARR_URL:
+            return False, (
+                f"Dispatcharr URL is still the placeholder example "
+                f"({self.PLACEHOLDER_DISPATCHARR_URL}). Update it to your "
+                "actual Dispatcharr URL in Settings and click Save."
+            )
+        if "localhost" in url_clean.lower() or "127.0.0.1" in url_clean:
+            logger.warning(
+                "Dispatcharr URL contains localhost/127.0.0.1. This works "
+                "only when your media server runs on the same host as "
+                "Dispatcharr with shared network namespace (e.g. Docker "
+                "host networking). Most setups need a routable LAN IP/"
+                "hostname for the .strm files to play from another machine. "
+                "Continuing anyway — verify playback after generation."
+            )
+        return True, None
 
     def _mask_url(self, url: str) -> str:
         """Mask the host portion of a URL for log output (keeps scheme + path)."""
