@@ -1,10 +1,12 @@
 """
-VOD .strm Generator Plugin for Dispatcharr
-v1.4.0 - Adds scheduled auto-rescan (cron) and a combined rescan-all action
+VOD2MLIB — VOD .strm Generator Plugin for Dispatcharr
+v1.5.0 — submission-ready manifest, bug fixes, safer cleanup
 
 MIT License
-Copyright (c) 2025-2026 shedunraid
-https://github.com/shedunraid/VODVSCODE
+Copyright (c) 2025-2026 shedunraid (original author)
+Copyright (c) 2026 R3XCHRIS (downstream maintainer, fork)
+Upstream:   https://github.com/shedunraid/VOD2MLIB
+This fork:  https://github.com/R3XCHRIS/VOD2MLIB
 """
 import os
 import re
@@ -16,8 +18,15 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.4.0"
-    description = """• Convert Dispatcharr VODs to media library format (.strm files).        • SETUP: Map a host folder to /VODS in your Dispatcharr container (e.g., /mnt/media:/VODS).        • Configure root folders in plugin settings (/VODS/Movies and /VODS/Series by default).        • USAGE: Click 'Scan for VODs' to see totals.        • Use 'Generate Movie/Series .strm Files' with batch sizes (start small like 10 to test).        • Episodes auto-fetch per series as needed.        • Repeat clicks until complete - smart skip logic prevents duplicates.        • TIMING: Movies are fast (~30 sec per 250).        • Series OPTIMIZED: REAL THREADING! 50-70% faster with 3 parallel workers (10 series: 120s → ~50s)!        • Use batch of 1 for testing.        • NOTE: If you get errors, do a full browser refresh (Ctrl+F5 / Cmd+Shift+R) and try again.        • If you like this plugin please donate: https://paypal.me/shedunraid"""
+    version = "1.5.0"
+    description = (
+        "Convert Dispatcharr VODs into media-server-friendly .strm files. "
+        "Map a host folder to /VODS in your Dispatcharr container, then click "
+        "'Scan for VODs' to see totals and 'Generate Movie/Series .strm Files' "
+        "to process them in batches. Series episodes are auto-fetched per series "
+        "with 3 parallel workers. Use 'Apply Schedule' to enable a cron-driven "
+        "auto-rescan. If you hit a UI glitch, hard-refresh the browser (Cmd/Ctrl+Shift+R)."
+    )
     
     fields = [
         {
@@ -59,7 +68,7 @@ class Plugin:
         {
             "id": "generate_nfo",
             "label": "Generate Movie NFO Files",
-            "type": "checkbox",
+            "type": "boolean",
             "default": True,
             "help_text": "Create .nfo metadata files for movies"
         },
@@ -80,7 +89,7 @@ class Plugin:
         {
             "id": "generate_series_nfo",
             "label": "Generate Series NFO Files",
-            "type": "checkbox",
+            "type": "boolean",
             "default": True,
             "help_text": "Create .nfo metadata files for series and episodes"
         },
@@ -193,19 +202,20 @@ class Plugin:
         logger.info("")
         
         try:
-            from apps.vod.models import M3UMovieRelation, M3USeriesRelation
+            from apps.vod.models import Movie, Series, M3UMovieRelation, M3USeriesRelation
         except ImportError as e:
             logger.error("Failed to import models: %s", e)
             return {"status": "error", "message": f"Import error: {e}"}
-        
+
         try:
-            # Count movies and series
-            movie_count = M3UMovieRelation.objects.count()
-            series_count = M3USeriesRelation.objects.count()
-            
+            movie_count = Movie.objects.count()
+            series_count = Series.objects.count()
+            movie_relations = M3UMovieRelation.objects.count()
+            series_relations = M3USeriesRelation.objects.count()
+
             logger.info("=" * 60)
-            logger.info("MOVIES: %d", movie_count)
-            logger.info("SERIES: %d", series_count)
+            logger.info("MOVIES: %d unique  (%d M3U relations)", movie_count, movie_relations)
+            logger.info("SERIES: %d unique  (%d M3U relations)", series_count, series_relations)
             logger.info("=" * 60)
             logger.info("")
             logger.info("Use 'Generate Movie .strm Files' for movies")
@@ -326,17 +336,18 @@ class Plugin:
             movie = relation.movie
             stream_id = relation.stream_id
             
-            # Build movie name with year (clean language prefix)
             raw_name = movie.name or f"Unknown Movie {movie.id}"
             movie_name = self._clean_title(raw_name)
-            year = movie.year
-            
+            movie_name, title_year = self._strip_trailing_year(movie_name)
+            year = movie.year or title_year
+
+            safe_name = self._sanitize_filename(movie_name)
             if year:
-                folder_name = f"{self._sanitize_filename(movie_name)} ({year})"
-                strm_filename = f"{self._sanitize_filename(movie_name)} ({year}).strm"
+                folder_name = f"{safe_name} ({year})"
+                strm_filename = f"{safe_name} ({year}).strm"
             else:
-                folder_name = self._sanitize_filename(movie_name)
-                strm_filename = f"{self._sanitize_filename(movie_name)}.strm"
+                folder_name = safe_name
+                strm_filename = f"{safe_name}.strm"
             
             # Create movie folder and paths
             movie_folder = os.path.join(root_folder, folder_name)
@@ -425,17 +436,38 @@ class Plugin:
             "errors": errors
         }
     
+    def _series_target_folder(self, series, series_root: str):
+        """Compute the target folder for a series. Returns (folder_path, clean_name, year)."""
+        raw_name = series.name or f"Unknown Series {series.id}"
+        clean_name = self._clean_title(raw_name)
+        clean_name, title_year = self._strip_trailing_year(clean_name)
+        year = series.year or title_year
+        safe = self._sanitize_filename(clean_name)
+        folder_name = f"{safe} ({year})" if year else safe
+        return os.path.join(series_root, folder_name), clean_name, year
+
+    def _series_already_processed(self, series_folder: str) -> bool:
+        """A series is considered processed if its folder contains any 'Season ...' subdir."""
+        if not os.path.isdir(series_folder):
+            return False
+        try:
+            return any(
+                item.startswith("Season") and os.path.isdir(os.path.join(series_folder, item))
+                for item in os.listdir(series_folder)
+            )
+        except OSError:
+            return False
+
     def _generate_series(self, settings: Dict[str, Any], logger):
         """Generate series .strm files with episodes using parallel processing."""
         series_root = settings.get("series_root_folder", "/VODS/Series")
         dispatcharr_url = settings.get("dispatcharr_url", "http://192.168.99.11:9191").rstrip("/")
         batch_size = settings.get("series_batch_size") or "10"
         generate_nfo = settings.get("generate_series_nfo", True)
-        
-        # Validate URL
+
         if "localhost" in dispatcharr_url.lower() or "127.0.0.1" in dispatcharr_url:
             return {"status": "error", "message": "Dispatcharr URL must be an actual IP address!"}
-        
+
         logger.info("")
         logger.info("Configuration:")
         logger.info("  Series Root: %s", series_root)
@@ -444,110 +476,100 @@ class Plugin:
         logger.info("  Generate NFO: %s", "Yes" if generate_nfo else "No")
         logger.info("  Threading: ENABLED (3 workers)")
         logger.info("")
-        
+
         try:
             from apps.vod.models import M3USeriesRelation
         except ImportError as e:
             logger.error("Failed to import models: %s", e)
             return {"status": "error", "message": f"Import error: {e}"}
-        
-        # Get series
+
         try:
             query = M3USeriesRelation.objects.select_related('series', 'm3u_account', 'category')
             total_count = query.count()
-            
+
             if batch_size == "all":
-                series_relations = list(query)
-                logger.info("Processing ALL %d series", total_count)
                 target_batch = total_count
+                logger.info("Mode: process ALL %d series", total_count)
             else:
                 target_batch = int(batch_size)
-                # Fetch enough to account for skips
-                fetch_size = min(target_batch * 3, total_count)
-                series_relations = list(query[:fetch_size])
-                logger.info("Fetching %d series to process batch of %d", fetch_size, target_batch)
-            
-            if not series_relations:
+                logger.info("Target batch size: %d (of %d total)", target_batch, total_count)
+
+            if total_count == 0:
                 return {"status": "ok", "message": "No series found"}
-            
-            logger.info("Found %d series to process", len(series_relations))
-            logger.info("")
         except Exception as e:
             logger.error("Query failed: %s", e)
             return {"status": "error", "message": f"Database error: {e}"}
-        
-        # Ensure root exists
+
         try:
             os.makedirs(series_root, exist_ok=True)
-        except Exception as e:
+        except OSError as e:
             return {"status": "error", "message": f"Folder creation error: {e}"}
-        
-        # Process series with ThreadPoolExecutor (3 workers for safety)
+
+        logger.info("Filtering already-processed series...")
+        unprocessed = []
+        scanned = 0
+        for series_rel in query.iterator():
+            scanned += 1
+            folder, _, _ = self._series_target_folder(series_rel.series, series_root)
+            if not self._series_already_processed(folder):
+                unprocessed.append(series_rel)
+                if batch_size != "all" and len(unprocessed) >= target_batch:
+                    break
+
+        already_done = scanned - len(unprocessed)
+        logger.info("Scanned %d series; %d already processed; %d to process this run", scanned, already_done, len(unprocessed))
+        logger.info("")
+
+        if not unprocessed:
+            logger.info("Nothing to do — every scanned series already has Season folders.")
+            return {
+                "status": "ok",
+                "message": f"Nothing to process; {already_done} series already done.",
+                "series_processed": 0,
+                "episodes_created": 0,
+                "nfo_created": 0,
+                "errors": 0,
+            }
+
         created_strm = 0
         created_nfo = 0
         errors = 0
         series_created = 0
         skipped = 0
-        
-        logger.info("Processing series with 3 parallel workers:")
+
+        logger.info("Processing %d series with 3 parallel workers:", len(unprocessed))
         logger.info("-" * 60)
-        
-        max_workers = 3
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Submit tasks for series that need processing
-            futures = {}
-            submitted = 0
-            
-            for series_rel in series_relations:
-                # Stop submitting if we already have enough created
-                if batch_size != "all" and series_created >= target_batch:
-                    break
-                
-                # Submit the processing task
-                future = executor.submit(
+
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(
                     self._process_single_series,
                     series_rel,
                     dispatcharr_url,
                     generate_nfo,
                     series_root,
-                    logger
-                )
-                futures[future] = series_rel
-                submitted += 1
-            
-            logger.info("Submitted %d series for parallel processing...", submitted)
-            logger.info("")
-            
-            # Process results as they complete
+                    logger,
+                ): series_rel
+                for series_rel in unprocessed
+            }
+
             for idx, future in enumerate(as_completed(futures), 1):
-                series_rel = futures[future]
-                
                 try:
                     result = future.result()
-                    
-                    if result.get("skipped"):
-                        skipped += 1
-                        logger.info("[%d/%d] %s", idx, submitted, result["message"])
-                    elif result.get("created"):
-                        series_created += 1
-                        created_strm += result["episodes"]
-                        created_nfo += result["nfo_files"]
-                        logger.info("[%d/%d] %s", idx, submitted, result["message"])
-                    else:
-                        # No episodes or other issue
-                        logger.info("[%d/%d] %s", idx, submitted, result["message"])
-                    
-                    if "error" in result:
-                        errors += 1
-                    
-                    # Stop if we've created enough
-                    if batch_size != "all" and series_created >= target_batch:
-                        logger.info("")
-                        logger.info("Batch target reached! Waiting for in-progress tasks...")
-                        
                 except Exception as e:
-                    logger.error("[%d/%d] Error processing series: %s", idx, submitted, e)
+                    logger.error("[%d/%d] Worker raised: %s", idx, len(futures), e)
                     errors += 1
+                    continue
+
+                if result.get("skipped"):
+                    skipped += 1
+                elif result.get("created"):
+                    series_created += 1
+                    created_strm += result["episodes"]
+                    created_nfo += result["nfo_files"]
+                if "error" in result:
+                    errors += 1
+                logger.info("[%d/%d] %s", idx, len(futures), result["message"])
         
         logger.info("")
         logger.info("=" * 60)
@@ -577,61 +599,37 @@ class Plugin:
         """Process a single series - fetches episodes and creates files (thread-safe)."""
         from apps.vod.models import M3UEpisodeRelation
         from apps.vod.tasks import refresh_series_episodes
-        
+
         series = series_rel.series
-        
-        # Clean series name
-        raw_name = series.name or f"Unknown Series {series.id}"
-        series_name = self._clean_title(raw_name)
-        year = series.year
-        
-        if year:
-            series_folder_name = f"{self._sanitize_filename(series_name)} ({year})"
-        else:
-            series_folder_name = self._sanitize_filename(series_name)
-        
-        series_folder = os.path.join(series_root, series_folder_name)
-        
-        # Check if already processed (has Season folders with content)
-        if os.path.exists(series_folder):
-            try:
-                has_seasons = any(
-                    item.startswith("Season") and os.path.isdir(os.path.join(series_folder, item))
-                    for item in os.listdir(series_folder)
-                )
-                if has_seasons:
-                    return {
-                        "created": False,
-                        "skipped": True,
-                        "series_name": series_name,
-                        "episodes": 0,
-                        "nfo_files": 0,
-                        "message": f"{series_name} - Already processed"
-                    }
-            except:
-                pass  # If error checking, process anyway
-        
+        series_folder, series_name, _year = self._series_target_folder(series, series_root)
+
+        if self._series_already_processed(series_folder):
+            return {
+                "created": False,
+                "skipped": True,
+                "series_name": series_name,
+                "episodes": 0,
+                "nfo_files": 0,
+                "message": f"{series_name} - Already processed",
+            }
+
         try:
-            # Fetch episodes for this series
             custom_props = series_rel.custom_properties or {}
             if not custom_props.get('episodes_fetched', False):
                 refresh_series_episodes(
                     account=series_rel.m3u_account,
                     series=series_rel.series,
-                    external_series_id=series_rel.external_series_id
+                    external_series_id=series_rel.external_series_id,
                 )
-            
-            # Get episodes for this series
-            episodes = M3UEpisodeRelation.objects.filter(
-                m3u_account=series_rel.m3u_account
-            ).select_related('episode')
-            
-            # Filter to only episodes belonging to this series
-            episodes = [ep for ep in episodes if ep.episode.series and ep.episode.series.id == series.id]
-            
-            # Sort by season and episode number
-            episodes = sorted(episodes, key=lambda ep: (ep.episode.season_number or 0, ep.episode.episode_number or 0))
-            
+
+            episodes = list(
+                M3UEpisodeRelation.objects.filter(
+                    m3u_account=series_rel.m3u_account,
+                    episode__series=series,
+                )
+                .select_related('episode')
+                .order_by('episode__season_number', 'episode__episode_number')
+            )
             episode_count = len(episodes)
             
             if episode_count == 0:
@@ -714,256 +712,224 @@ class Plugin:
                 "message": f"{series_name} - ✗ Error: {e}"
             }
     
+    _PLUGIN_FILE_SUFFIXES = ('.strm', '.nfo')
+
+    def _delete_plugin_files_in_dir(self, dir_path: str, logger):
+        """Delete only .strm and .nfo files in dir_path. Returns (strm_deleted, nfo_deleted, errors)."""
+        strm = nfo = errors = 0
+        try:
+            entries = os.listdir(dir_path)
+        except OSError as e:
+            logger.error("Cannot list %s: %s", dir_path, e)
+            return 0, 0, 1
+
+        for name in entries:
+            if not name.endswith(self._PLUGIN_FILE_SUFFIXES):
+                continue
+            path = os.path.join(dir_path, name)
+            if not os.path.isfile(path):
+                continue
+            try:
+                os.remove(path)
+                if name.endswith('.strm'):
+                    strm += 1
+                else:
+                    nfo += 1
+            except OSError as e:
+                logger.error("Failed to delete %s: %s", path, e)
+                errors += 1
+        return strm, nfo, errors
+
+    def _try_rmdir(self, path: str) -> bool:
+        """Remove path if it's an empty directory. Returns True if removed."""
+        try:
+            os.rmdir(path)
+            return True
+        except OSError:
+            return False
+
     def _cleanup_movies(self, settings: Dict[str, Any], logger):
-        """Clean up all generated movie .strm files and folders."""
+        """Delete plugin-generated .strm and .nfo files under the movies root.
+
+        Folders that still contain user-added files (subtitles, posters, etc.)
+        are preserved; folders that become empty are removed.
+        """
         root_folder = settings.get("root_folder", "/VODS/Movies")
-        
+
         logger.info("=" * 60)
-        logger.info("VOD .strm Generator v%s", self.version)
-        logger.info("Action: cleanup")
+        logger.info("VOD2MLIB v%s — cleanup_movies", self.version)
+        logger.info("Root: %s", root_folder)
         logger.info("=" * 60)
         logger.info("")
-        logger.info("⚠️  WARNING: This will delete ALL movie folders from Movies root!")
-        logger.info("Root Folder: %s", root_folder)
-        logger.info("")
-        
-        # Check if root folder exists
+
         if not os.path.exists(root_folder):
             logger.info("Root folder doesn't exist. Nothing to clean up.")
-            return {
-                "status": "ok",
-                "message": "Root folder doesn't exist",
-                "deleted_folders": 0,
-                "deleted_files": 0
-            }
-        
-        # Scan for folders with .strm or .nfo files
-        logger.info("Scanning for movie folders...")
-        folders_to_delete = []
-        strm_files_found = 0
-        nfo_files_found = 0
-        
+            return {"status": "ok", "message": "Root folder doesn't exist", "deleted_folders": 0, "deleted_strm": 0, "deleted_nfo": 0}
+
         try:
-            for item in os.listdir(root_folder):
-                item_path = os.path.join(root_folder, item)
-                
-                # Only process directories
-                if os.path.isdir(item_path):
-                    # Check if this folder contains .strm or .nfo files
-                    has_plugin_files = False
-                    for file in os.listdir(item_path):
-                        if file.endswith('.strm'):
-                            has_plugin_files = True
-                            strm_files_found += 1
-                        elif file.endswith('.nfo'):
-                            nfo_files_found += 1
-                    
-                    if has_plugin_files:
-                        folders_to_delete.append(item_path)
-            
-            logger.info("Found %d folders with plugin files", len(folders_to_delete))
-            logger.info("  .strm files: %d", strm_files_found)
-            logger.info("  .nfo files: %d", nfo_files_found)
-            logger.info("")
-            
-            if len(folders_to_delete) == 0:
-                logger.info("No movie folders found. Nothing to delete.")
-                return {
-                    "status": "ok",
-                    "message": "No .strm files found",
-                    "deleted_folders": 0,
-                    "deleted_files": 0
-                }
-            
-            # Show what will be deleted
-            logger.info("Folders to be deleted:")
-            logger.info("-" * 60)
-            for idx, folder in enumerate(folders_to_delete[:10], 1):  # Show first 10
-                logger.info("  [%d] %s", idx, os.path.basename(folder))
-            
-            if len(folders_to_delete) > 10:
-                logger.info("  ... and %d more folders", len(folders_to_delete) - 10)
-            
-            logger.info("")
-            logger.info("Proceeding with deletion...")
-            logger.info("")
-            
-            # Delete folders
-            deleted_folders = 0
-            deleted_strm = 0
-            deleted_nfo = 0
-            errors = 0
-            
-            for idx, folder_path in enumerate(folders_to_delete, 1):
-                try:
-                    # Count files before deletion
-                    strm_count = sum(1 for f in os.listdir(folder_path) if f.endswith('.strm'))
-                    nfo_count = sum(1 for f in os.listdir(folder_path) if f.endswith('.nfo'))
-                    
-                    # Delete the entire folder
-                    import shutil
-                    shutil.rmtree(folder_path)
-                    
+            entries = sorted(os.listdir(root_folder))
+        except OSError as e:
+            return {"status": "error", "message": f"Cannot list {root_folder}: {e}"}
+
+        deleted_folders = deleted_strm = deleted_nfo = preserved = errors = 0
+        scanned = 0
+        for item in entries:
+            item_path = os.path.join(root_folder, item)
+            if not os.path.isdir(item_path):
+                continue
+            scanned += 1
+            strm, nfo, err = self._delete_plugin_files_in_dir(item_path, logger)
+            deleted_strm += strm
+            deleted_nfo += nfo
+            errors += err
+            if (strm + nfo) > 0:
+                if self._try_rmdir(item_path):
                     deleted_folders += 1
-                    deleted_strm += strm_count
-                    deleted_nfo += nfo_count
-                    
-                    # Log progress every 50 folders
-                    if idx % 50 == 0 or idx == len(folders_to_delete):
-                        logger.info("Progress: %d/%d folders deleted", idx, len(folders_to_delete))
-                    
-                except Exception as e:
-                    logger.error("Failed to delete %s: %s", folder_path, e)
-                    errors += 1
-            
-            logger.info("")
-            logger.info("=" * 60)
-            logger.info("CLEANUP SUMMARY:")
-            logger.info("  Folders deleted:    %d", deleted_folders)
-            logger.info("  .strm deleted:      %d", deleted_strm)
-            logger.info("  .nfo deleted:       %d", deleted_nfo)
-            logger.info("  Errors:             %d", errors)
-            logger.info("=" * 60)
-            logger.info("")
-            logger.info("Cleanup complete!")
-            
-            summary_msg = f"Deleted {deleted_folders} folders ({deleted_strm} .strm"
-            if deleted_nfo > 0:
-                summary_msg += f" + {deleted_nfo} .nfo"
-            summary_msg += " files)"
-            
-            return {
-                "status": "ok",
-                "message": summary_msg,
-                "deleted_folders": deleted_folders,
-                "deleted_strm": deleted_strm,
-                "deleted_nfo": deleted_nfo,
-                "errors": errors
-            }
-            
-        except Exception as e:
-            logger.error("Cleanup failed: %s", e)
-            return {
-                "status": "error",
-                "message": f"Cleanup error: {e}"
-            }
-    
+                else:
+                    preserved += 1
+                    logger.info("Preserved (user files remain): %s", item)
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("CLEANUP SUMMARY")
+        logger.info("  Folders scanned:   %d", scanned)
+        logger.info("  Folders removed:   %d", deleted_folders)
+        logger.info("  Folders preserved: %d  (user-added files inside)", preserved)
+        logger.info("  .strm deleted:     %d", deleted_strm)
+        logger.info("  .nfo deleted:      %d", deleted_nfo)
+        logger.info("  Errors:            %d", errors)
+        logger.info("=" * 60)
+
+        msg = f"Deleted {deleted_strm} .strm + {deleted_nfo} .nfo, removed {deleted_folders} folders"
+        if preserved:
+            msg += f", preserved {preserved} (user files)"
+        return {
+            "status": "ok",
+            "message": msg,
+            "deleted_folders": deleted_folders,
+            "deleted_strm": deleted_strm,
+            "deleted_nfo": deleted_nfo,
+            "preserved_folders": preserved,
+            "errors": errors,
+        }
+
     def _cleanup_series(self, settings: Dict[str, Any], logger):
-        """Clean up all generated series .strm files and folders."""
+        """Delete plugin-generated .strm and .nfo files under the series root.
+
+        Walks Season/* subfolders. Season folders that become empty are removed,
+        then series folders that become empty (no Season subdirs and no other
+        files) are removed too. Folders with user-added files are preserved.
+        """
         series_root = settings.get("series_root_folder", "/VODS/Series")
-        
+
         logger.info("=" * 60)
-        logger.info("Series Cleanup")
+        logger.info("VOD2MLIB v%s — cleanup_series", self.version)
+        logger.info("Root: %s", series_root)
         logger.info("=" * 60)
         logger.info("")
-        logger.info("⚠️  WARNING: This will delete ALL series folders!")
-        logger.info("Series Root: %s", series_root)
-        logger.info("")
-        
+
         if not os.path.exists(series_root):
             logger.info("Series root doesn't exist. Nothing to clean up.")
             return {"status": "ok", "message": "Series root doesn't exist", "deleted": 0}
-        
-        # Scan for series folders (they contain Season folders)
-        logger.info("Scanning for series folders...")
-        folders_to_delete = []
-        strm_count = 0
-        nfo_count = 0
-        
+
         try:
-            import shutil
-            
-            for item in os.listdir(series_root):
-                item_path = os.path.join(series_root, item)
-                
-                if os.path.isdir(item_path):
-                    # Check if has Season folders or .strm files
-                    has_series_content = False
-                    
-                    for subitem in os.listdir(item_path):
-                        subitem_path = os.path.join(item_path, subitem)
-                        
-                        # Check for Season folders
-                        if os.path.isdir(subitem_path) and subitem.startswith("Season"):
-                            has_series_content = True
-                            # Count files in season folder
-                            for file in os.listdir(subitem_path):
-                                if file.endswith('.strm'):
-                                    strm_count += 1
-                                elif file.endswith('.nfo'):
-                                    nfo_count += 1
-                        
-                        # Count tvshow.nfo
-                        if subitem == "tvshow.nfo":
-                            nfo_count += 1
-                    
-                    if has_series_content:
-                        folders_to_delete.append(item_path)
-            
-            logger.info("Found %d series folders", len(folders_to_delete))
-            logger.info("  .strm files: ~%d", strm_count)
-            logger.info("  .nfo files: ~%d", nfo_count)
-            logger.info("")
-            
-            if len(folders_to_delete) == 0:
-                logger.info("No series folders found. Nothing to delete.")
-                return {"status": "ok", "message": "No series found", "deleted": 0}
-            
-            # Show first 10
-            logger.info("Series to be deleted:")
-            logger.info("-" * 60)
-            for idx, folder in enumerate(folders_to_delete[:10], 1):
-                logger.info("  [%d] %s", idx, os.path.basename(folder))
-            
-            if len(folders_to_delete) > 10:
-                logger.info("  ... and %d more", len(folders_to_delete) - 10)
-            
-            logger.info("")
-            logger.info("Proceeding with deletion...")
-            logger.info("")
-            
-            # Delete series folders
-            deleted = 0
-            errors = 0
-            
-            for idx, folder_path in enumerate(folders_to_delete, 1):
+            entries = sorted(os.listdir(series_root))
+        except OSError as e:
+            return {"status": "error", "message": f"Cannot list {series_root}: {e}"}
+
+        deleted_strm = deleted_nfo = errors = 0
+        seasons_removed = series_removed = preserved = 0
+
+        for series_name in entries:
+            series_path = os.path.join(series_root, series_name)
+            if not os.path.isdir(series_path):
+                continue
+
+            try:
+                sub_entries = os.listdir(series_path)
+            except OSError as e:
+                logger.error("Cannot list %s: %s", series_path, e)
+                errors += 1
+                continue
+
+            for sub in sub_entries:
+                sub_path = os.path.join(series_path, sub)
+                if os.path.isdir(sub_path) and sub.startswith("Season"):
+                    strm, nfo, err = self._delete_plugin_files_in_dir(sub_path, logger)
+                    deleted_strm += strm
+                    deleted_nfo += nfo
+                    errors += err
+                    if self._try_rmdir(sub_path):
+                        seasons_removed += 1
+
+            tvshow_path = os.path.join(series_path, "tvshow.nfo")
+            if os.path.isfile(tvshow_path):
                 try:
-                    shutil.rmtree(folder_path)
-                    deleted += 1
-                    
-                    if idx % 10 == 0 or idx == len(folders_to_delete):
-                        logger.info("Progress: %d/%d deleted", idx, len(folders_to_delete))
-                
-                except Exception as e:
-                    logger.error("Failed to delete %s: %s", folder_path, e)
+                    os.remove(tvshow_path)
+                    deleted_nfo += 1
+                except OSError as e:
+                    logger.error("Failed to delete %s: %s", tvshow_path, e)
                     errors += 1
-            
-            logger.info("")
-            logger.info("=" * 60)
-            logger.info("CLEANUP SUMMARY:")
-            logger.info("  Series deleted: %d", deleted)
-            logger.info("  Errors: %d", errors)
-            logger.info("=" * 60)
-            
-            return {
-                "status": "ok",
-                "message": f"Deleted {deleted} series folders",
-                "deleted": deleted,
-                "errors": errors
-            }
-            
-        except Exception as e:
-            logger.error("Cleanup failed: %s", e)
-            return {"status": "error", "message": f"Cleanup error: {e}"}
+
+            if self._try_rmdir(series_path):
+                series_removed += 1
+            else:
+                preserved += 1
+
+        logger.info("")
+        logger.info("=" * 60)
+        logger.info("CLEANUP SUMMARY")
+        logger.info("  Series removed:      %d", series_removed)
+        logger.info("  Series preserved:    %d  (user-added files inside)", preserved)
+        logger.info("  Season dirs removed: %d", seasons_removed)
+        logger.info("  .strm deleted:       %d", deleted_strm)
+        logger.info("  .nfo deleted:        %d", deleted_nfo)
+        logger.info("  Errors:              %d", errors)
+        logger.info("=" * 60)
+
+        msg = (
+            f"Deleted {deleted_strm} .strm + {deleted_nfo} .nfo, "
+            f"removed {series_removed} series ({seasons_removed} season dirs)"
+        )
+        if preserved:
+            msg += f", preserved {preserved}"
+        return {
+            "status": "ok",
+            "message": msg,
+            "series_removed": series_removed,
+            "seasons_removed": seasons_removed,
+            "preserved_series": preserved,
+            "deleted_strm": deleted_strm,
+            "deleted_nfo": deleted_nfo,
+            "errors": errors,
+        }
     
+    _LANGUAGE_PREFIX_RE = re.compile(r'^[A-Z]{2,3}\s+-\s*')
+    _TRAILING_YEAR_RE = re.compile(r'\s*\((\d{4})\)\s*$')
+
     def _clean_title(self, title: str) -> str:
-        """Remove language prefixes (EN -, FR -, etc.) from movie titles."""
+        """Remove language prefixes like 'EN - ', 'FR - ' from titles.
+
+        Requires whitespace before the dash so real titles like 'AC-130' or
+        'MI-5' are not stripped.
+        """
         if not title:
             return title
-        
-        # Remove common language prefixes: EN -, FR -, US -, etc.
-        cleaned = re.sub(r'^[A-Z]{2,3}\s*-\s*', '', title)
-        return cleaned.strip()
+        return self._LANGUAGE_PREFIX_RE.sub('', title).strip()
+
+    def _strip_trailing_year(self, title: str):
+        """Strip a trailing ' (YYYY)' from a title.
+
+        Returns (cleaned_title, year) where year is an int if found, else None.
+        Used to avoid double-year folder names when the source title already
+        contains the year.
+        """
+        if not title:
+            return title or "", None
+        match = self._TRAILING_YEAR_RE.search(title)
+        if not match:
+            return title, None
+        return self._TRAILING_YEAR_RE.sub('', title).rstrip(), int(match.group(1))
     
     def _extract_genres(self, category_name: str) -> list:
         """Extract genre names from category name."""

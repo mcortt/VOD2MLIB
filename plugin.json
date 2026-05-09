@@ -1,0 +1,186 @@
+{
+  "name": "VOD2MLIB",
+  "version": "1.5.0",
+  "description": "Generate .strm files for Dispatcharr VOD movies and series, with optional NFO metadata, batch processing, and scheduled auto-rescan.",
+  "author": "R3XCHRIS",
+  "license": "MIT",
+  "min_dispatcharr_version": "v0.24.0",
+  "repo_url": "https://github.com/R3XCHRIS/VOD2MLIB",
+  "fields": [
+    {
+      "id": "root_folder",
+      "label": "Root Folder for Movies",
+      "type": "string",
+      "default": "/VODS/Movies",
+      "help_text": "Path inside the Dispatcharr container where movie folders will be created. Map a host folder to /VODS in your container."
+    },
+    {
+      "id": "series_root_folder",
+      "label": "Root Folder for Series",
+      "type": "string",
+      "default": "/VODS/Series",
+      "help_text": "Path inside the Dispatcharr container where series folders will be created."
+    },
+    {
+      "id": "dispatcharr_url",
+      "label": "Dispatcharr URL",
+      "type": "string",
+      "default": "",
+      "placeholder": "http://192.168.1.10:9191",
+      "help_text": "Full URL to your Dispatcharr instance (NOT localhost). Baked into .strm files, so it must be reachable from your media server."
+    },
+    {
+      "id": "batch_size",
+      "label": "Batch Size (Movies)",
+      "type": "select",
+      "default": "250",
+      "options": [
+        {"value": "10", "label": "10 movies"},
+        {"value": "100", "label": "100 movies"},
+        {"value": "200", "label": "200 movies"},
+        {"value": "250", "label": "250 movies"},
+        {"value": "500", "label": "500 movies"},
+        {"value": "1000", "label": "1000 movies"},
+        {"value": "all", "label": "All movies"}
+      ],
+      "help_text": "Number of movies to process in this run. Start small (10) to verify, then scale up."
+    },
+    {
+      "id": "generate_nfo",
+      "label": "Generate Movie NFO Files",
+      "type": "boolean",
+      "default": true,
+      "help_text": "Create .nfo metadata files alongside each movie .strm."
+    },
+    {
+      "id": "series_batch_size",
+      "label": "Batch Size (Series)",
+      "type": "select",
+      "default": "10",
+      "options": [
+        {"value": "1", "label": "1 series (testing)"},
+        {"value": "5", "label": "5 series"},
+        {"value": "10", "label": "10 series"},
+        {"value": "25", "label": "25 series"},
+        {"value": "all", "label": "All series (slow!)"}
+      ],
+      "help_text": "Number of series to process. Episodes are auto-fetched per series."
+    },
+    {
+      "id": "generate_series_nfo",
+      "label": "Generate Series NFO Files",
+      "type": "boolean",
+      "default": true,
+      "help_text": "Create tvshow.nfo and per-episode .nfo metadata files."
+    },
+    {
+      "id": "schedule_cron",
+      "label": "Auto-Rescan Schedule (cron)",
+      "type": "string",
+      "default": "0 3 * * *",
+      "help_text": "Standard 5-field cron: 'minute hour day-of-month month day-of-week'. Default '0 3 * * *' = every day at 03:00. Used by Apply Schedule."
+    },
+    {
+      "id": "schedule_target",
+      "label": "Scheduled Action",
+      "type": "select",
+      "default": "rescan_all",
+      "options": [
+        {"value": "scan_all_vods", "label": "Scan only (totals)"},
+        {"value": "generate_movies", "label": "Movies only"},
+        {"value": "generate_series", "label": "Series only"},
+        {"value": "rescan_all", "label": "Full rescan (movies + series)"}
+      ],
+      "help_text": "Which action the scheduler should run on each tick."
+    }
+  ],
+  "actions": [
+    {
+      "id": "scan_all_vods",
+      "label": "Scan for VODs to Convert",
+      "description": "Show total movies and series available in Dispatcharr.",
+      "button_label": "Scan",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "generate_movies",
+      "label": "Generate Movie .strm Files",
+      "description": "Process movies according to batch size.",
+      "button_label": "Generate Movies",
+      "button_variant": "filled",
+      "button_color": "green"
+    },
+    {
+      "id": "generate_series",
+      "label": "Generate Series .strm Files",
+      "description": "Fetch episodes + create .strm files (auto-fetch per series, 3 parallel workers).",
+      "button_label": "Generate Series",
+      "button_variant": "filled",
+      "button_color": "green"
+    },
+    {
+      "id": "rescan_all",
+      "label": "Rescan All (Movies + Series)",
+      "description": "One-shot full rescan: scan totals, then generate movies, then series. This is what the cron schedule calls.",
+      "button_label": "Rescan All",
+      "button_variant": "filled",
+      "button_color": "teal"
+    },
+    {
+      "id": "apply_schedule",
+      "label": "Apply Schedule",
+      "description": "Register or update the periodic auto-rescan task using the cron expression in settings. Snapshots current settings into the task.",
+      "button_label": "Apply Schedule",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "schedule_status",
+      "label": "Show Schedule Status",
+      "description": "Show whether a scheduled rescan is registered, its cron expression, last run, and run count.",
+      "button_label": "Schedule Status",
+      "button_variant": "outline",
+      "button_color": "blue"
+    },
+    {
+      "id": "remove_schedule",
+      "label": "Remove Schedule",
+      "description": "Unregister the periodic auto-rescan task.",
+      "button_label": "Remove Schedule",
+      "button_variant": "outline",
+      "button_color": "orange",
+      "confirm": {
+        "required": true,
+        "title": "Remove auto-rescan schedule?",
+        "message": "This unregisters the periodic task. You can re-create it any time with Apply Schedule."
+      }
+    },
+    {
+      "id": "cleanup_movies",
+      "label": "Clean Up Movies",
+      "description": "Remove plugin-generated .strm and .nfo files from the movies root. Empty folders are removed; folders with user-added files (subtitles, posters) are preserved.",
+      "button_label": "Clean Up Movies",
+      "button_variant": "filled",
+      "button_color": "red",
+      "confirm": {
+        "required": true,
+        "title": "Delete all generated movie files?",
+        "message": "This deletes every .strm and .nfo file under your Movies root that this plugin created. User-added files in those folders are preserved. Continue?"
+      }
+    },
+    {
+      "id": "cleanup_series",
+      "label": "Clean Up Series",
+      "description": "Remove plugin-generated .strm and .nfo files from the series root. Empty Season/series folders are removed; folders with user-added files are preserved.",
+      "button_label": "Clean Up Series",
+      "button_variant": "filled",
+      "button_color": "red",
+      "confirm": {
+        "required": true,
+        "title": "Delete all generated series files?",
+        "message": "This deletes every .strm and .nfo file under your Series root that this plugin created. User-added files in those folders are preserved. Continue?"
+      }
+    }
+  ]
+}

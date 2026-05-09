@@ -1,6 +1,24 @@
-# VOD .strm Generator v1.4
+# VOD2MLIB — VOD → Media-Library .strm Generator (v1.5)
 
-Simple extension of v0.1 with configurable batch sizes and scheduled auto-rescan.
+Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Plex, Jellyfin, Emby, Kodi) with optional NFO metadata, batch processing, and scheduled auto-rescan.
+
+## Credits
+
+- **Original author:** [shedunraid](https://github.com/shedunraid) — created v0.x–v1.3 ([upstream repo](https://github.com/shedunraid/VOD2MLIB)).
+- **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, and submission to the official Dispatcharr Plugins repo. The upstream has been dormant since early 2026; this fork continues maintenance.
+- Distributed under the MIT License.
+
+## What's New in v1.5
+
+- **Bug fixes:**
+  - Folder names no longer duplicate the year (e.g. `Aladdin (2026) (2026)` → `Aladdin (2026)`).
+  - Series `Batch Size` now actually limits how many series are processed (previously the limit was unreachable due to a thread-pool order bug).
+  - Episode lookup is now filtered at the database level rather than scanning the entire M3U episode table per series — large catalogues are dramatically faster.
+  - `_clean_title` no longer over-strips short uppercase prefixes from real titles like `AC-130`.
+  - `Scan for VODs` now reports unique movie/series counts, not duplicate-counted M3U relations.
+  - `generate_nfo` and `generate_series_nfo` toggles are now exposed in the Dispatcharr UI (previously rejected because of an invalid field type).
+- **Cleanup is now non-destructive:** `Clean Up Movies` / `Clean Up Series` only delete the `.strm` and `.nfo` files this plugin created. User-added files (subtitles, posters, extras) are preserved; folders are removed only if empty.
+- **Submission-ready:** added a `plugin.json` manifest with proper field types, button styling, and confirm dialogs.
 
 ## What's New in v1.4
 
@@ -26,15 +44,17 @@ Requires `django-celery-beat` and a running Celery beat scheduler in your Dispat
 
 ## Installation
 
-1. Zip the `plugin.py` file.
-2. In Dispatcharr → Plugins → Import
-3. Enable the plugin
+1. Map a host folder to `/VODS` in your Dispatcharr container (e.g. `-v /opt/dispatcharr-vods:/VODS`).
+2. Zip the `plugin.py`, `plugin.json`, `__init__.py`, `LICENSE`, and `README.md` files.
+3. Dispatcharr → Plugins → Import → upload the zip → enable the plugin.
 
 ## Settings
 
-- **Root Folder**: Where to create movie folders (e.g., `/data/movies`)
-- **Dispatcharr URL**: Your actual IP (e.g., `http://192.168.99.11:9191`) - NOT localhost!
-- **Batch Size**: How many movies to process (10, 50, 100, 200, 500, or All)
+- **Root Folder for Movies / Series:** paths inside the container (default `/VODS/Movies` and `/VODS/Series`).
+- **Dispatcharr URL:** the externally-reachable URL of your Dispatcharr instance (NOT `localhost`). It's baked into every `.strm`, so it must resolve from your media server.
+- **Batch Size (Movies / Series):** how many to process per click. Start at 10 to verify, scale up.
+- **Generate Movie / Series NFO Files:** toggle metadata file creation.
+- **Auto-Rescan Schedule (cron) / Scheduled Action:** see "Setting up the schedule" below.
 
 ## Usage
 
