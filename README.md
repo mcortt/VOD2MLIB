@@ -1,30 +1,110 @@
-# VOD to Media Library — Dispatcharr plugin
+<p align="center">
+  <img src="logo.png" alt="VOD to Media Library" width="200">
+</p>
 
-> v1.9.3 — slug `vod2mlib` (unchanged)
+<h1 align="center">VOD to Media Library</h1>
 
-A Dispatcharr plugin that converts your VOD catalogue into a folder of `.strm` files (with optional NFO metadata) that media servers like Jellyfin, Emby, Kodi, or ChannelsDVR can index and play.
+<p align="center">A Dispatcharr plugin that turns your VOD catalogue into a folder of <code>.strm</code> files (with optional NFO metadata) that media servers — Jellyfin, Emby, Kodi, ChannelsDVR — can index and play.</p>
+
+<p align="center">
+  <i>v1.9.3 — slug <code>vod2mlib</code></i>
+</p>
+
+> **Plex users:** Plex does *not* play `.strm` files. Jellyfin and ChannelsDVR do. See [Plex compatibility](#plex-compatibility) below.
 
 ## Credits
 
 - **Original author:** [shedunraid](https://github.com/shedunraid) — created v0.x–v1.3 ([upstream repo](https://github.com/shedunraid/VOD2MLIB)).
-- **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, packaging for the [official Dispatcharr Plugins catalogue](https://github.com/Dispatcharr/Plugins). Upstream has been dormant since early 2026; this fork continues maintenance.
+- **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, and packaging for the [official Dispatcharr Plugins catalogue](https://github.com/Dispatcharr/Plugins). Upstream has been dormant since early 2026; this fork continues maintenance.
 - MIT License.
-
-> **Plex users:** Plex does *not* play `.strm` files. Jellyfin and ChannelsDVR do. See [Plex compatibility](#plex-compatibility) below.
 
 ---
 
 ## Install
 
-1. **Map a host folder to `/VODS` in your Dispatcharr container.** Example Compose snippet:
+1. **Map a host folder to `/VODS` in your Dispatcharr container** (see [Sharing the VODs folder](#sharing-the-vods-folder-with-media-servers) for *why* this matters and how to share with other apps).
+
    ```yaml
-   volumes:
-     - /opt/dispatcharr-vods:/VODS
+   # docker-compose.yml
+   services:
+     dispatcharr:
+       volumes:
+         - /opt/dispatcharr-vods:/VODS
    ```
-2. **Zip the plugin files** (`plugin.py`, `plugin.json`, `__init__.py`, `LICENSE`, `README.md`).
+
+2. **Zip the plugin files** (`plugin.py`, `plugin.json`, `__init__.py`, `logo.png`, `LICENSE`, `README.md`).
+
 3. **Dispatcharr → Plugins → Import** → upload the zip → enable the plugin.
 
 Requires Dispatcharr **v0.24.0** or later. The auto-rescan feature additionally needs `django-celery-beat` (Dispatcharr ships with it).
+
+---
+
+## Sharing the VODs folder with media servers
+
+This is the part most people get wrong on first try.
+
+The plugin runs **inside the Dispatcharr container**. When it writes `/VODS/Movies/Aladdin (1992)/Aladdin (1992).strm`, that path exists inside the container's filesystem. For Jellyfin / ChannelsDVR / Kodi to find that file, **the same data has to be visible to them too** — either as a bind-mounted volume on the same host, or via a network share.
+
+**Three common patterns**, pick whichever matches your setup:
+
+### 1. Same host, both apps in Docker (recommended)
+
+Bind-mount the same host directory into both containers. The plugin writes; the media server reads.
+
+```yaml
+services:
+  dispatcharr:
+    volumes:
+      - /opt/dispatcharr-vods:/VODS    # plugin writes here
+
+  jellyfin:
+    volumes:
+      - /opt/dispatcharr-vods:/data/vods:ro    # read-only mount
+    # then in Jellyfin: Add Library → Movies → /data/vods/Movies
+    #                                  Shows  → /data/vods/Series
+```
+
+`:ro` (read-only) is good practice for the consumer — guarantees Jellyfin can't accidentally modify the plugin's output.
+
+### 2. Media server on the same host, *not* in Docker
+
+Just point the media server at the host path directly:
+
+```
+/opt/dispatcharr-vods/Movies   # for Movies library
+/opt/dispatcharr-vods/Series   # for Series library
+```
+
+Watch out for **file permissions** — the Dispatcharr container writes as its own UID (often `1000`/`dispatch`). If your media server runs under a different user, it may not be able to read the `.strm` files. Easiest fix: align UIDs, or `chmod -R a+r /opt/dispatcharr-vods`.
+
+### 3. Media server on a different host
+
+Export the directory over NFS/SMB from the host running Dispatcharr, mount it on the host running the media server.
+
+```bash
+# On the Dispatcharr host (Linux + NFS):
+echo "/opt/dispatcharr-vods 192.168.1.0/24(ro,sync,no_subtree_check)" >> /etc/exports
+sudo exportfs -ra
+
+# On the media server host:
+sudo mount -t nfs dispatcharr-host:/opt/dispatcharr-vods /mnt/vods
+# ... then point Jellyfin/Plex/Emby at /mnt/vods/{Movies,Series}
+```
+
+SMB works equally well; pick whatever your stack already uses.
+
+### One critical setting either way
+
+The `Dispatcharr URL` in plugin settings is **baked into every `.strm` file** — it's the URL the media server's player follows when you press Play. It MUST be reachable from wherever your media server runs:
+
+- Same host: a LAN IP works (e.g. `http://192.168.1.10:9191`).
+- Different host on same LAN: still a LAN IP, just make sure routing/firewall allows it.
+- Different network: a routable hostname/IP, possibly via Tailscale, VPN, or reverse proxy.
+
+`localhost` / `127.0.0.1` will not work — your media server is a different process, possibly on a different machine. The plugin actively rejects this.
+
+---
 
 ## Settings
 
@@ -55,18 +135,18 @@ The Settings tab is grouped into four sections:
 4. Verify with `[SCHEDULE] Show status` — last run / total runs populate after the first cron tick.
 5. Optional: click `[SCHEDULE] Test fire now` to immediately replay the scheduled action without waiting for the next cron tick.
 
-The cron snapshots your settings at click-time. Re-click Apply after changing any setting to refresh the snapshot.
+The cron snapshots your settings at click-time. **Re-click Apply after changing any setting** to refresh the snapshot.
 
 ## Plex compatibility
 
-Plex does **not** play `.strm` files (it can index them but the URL inside doesn't play). This is a long-standing Plex limitation, not a plugin bug. Workable paths:
+Plex does **not** play `.strm` files (it can index them but the URL inside doesn't play). This is a long-standing Plex limitation — it's been an unfulfilled feature request for 5+ years.
 
-- **Jellyfin alongside Plex** — Jellyfin plays `.strm` natively. Run it in a container next to Plex, point both at the same library folder.
-- **ChannelsDVR's Personal Media** — works perfectly with our output (point CDVR at the Movies/Series root).
+Workable alternatives:
+
+- **Jellyfin alongside Plex.** Jellyfin plays `.strm` natively. Run it in a container next to Plex, point both at the same library folder (see [Sharing the VODs folder](#sharing-the-vods-folder-with-media-servers) above).
+- **ChannelsDVR's Personal Media** — works perfectly out of the box. Point CDVR at the Movies/Series root.
 - **Kodi** — works.
 - **Emby** — works.
-
-See [the Plex investigation in this repo's issues](https://github.com/R3XCHRIS/VOD2MLIB/issues) (TBD) for a longer write-up.
 
 ## Troubleshooting
 
@@ -81,13 +161,17 @@ See [the Plex investigation in this repo's issues](https://github.com/R3XCHRIS/V
 
 **Schedule fires but no new files appear.** Most likely: `Refresh Existing Series` is OFF and your existing series already have folders, so the cron only adds *new* series. Toggle Refresh Existing ON, click Apply Schedule again to update the snapshot.
 
+**Media server can't see the generated files at all.** The host path isn't shared with the media server's process. See [Sharing the VODs folder](#sharing-the-vods-folder-with-media-servers).
+
+**Media server sees the files but playback fails immediately.** Open one of the `.strm` files in a text editor — it contains a single URL. Try fetching that URL from the machine running your media server (`curl -I <url>`). If that fails, the `Dispatcharr URL` setting isn't reachable from there. Fix the URL, re-run `[GENERATE] Movies` (or `[⚠ DANGER] Clean up Movies` first to wipe the stale URLs).
+
 **Folders named `Aladdin (2026) (2026)` (duplicate year).** This was a bug in v1.4 and earlier. Fixed in v1.5+ but pre-existing duplicate-year folders aren't auto-renamed. Run `[⚠ DANGER] Clean up Movies` once to remove them, then re-run `[GENERATE] Movies` to regenerate cleanly. (Cleanup deletes only `.strm`/`.nfo` — user-added subtitles/posters survive.)
 
 **Generate Series fails for some series.** The summary lists the failed series names with their errors. Common causes: M3U upstream timeout, malformed episode metadata. The plugin continues with the rest of the batch.
 
 **`localhost`/`127.0.0.1` in Dispatcharr URL.** The plugin refuses to write `.strm` with a localhost URL — your media server can't resolve it. Use the container's reachable IP/hostname.
 
-## Tests
+## Development
 
 Pure-helper unit tests live in `tests/`. From the repo root:
 
@@ -97,27 +181,7 @@ python3 -m pytest tests/ -v
 
 The tests don't need Django or a running Dispatcharr — they exercise `_clean_title`, `_strip_trailing_year`, `_sanitize_filename`, `_parse_cron`, `_extract_genres`, `_mask_url`, and the path-building helpers in isolation. 45 tests, ~50ms.
 
-## Changelog
-
-**v1.9.3** — Replaced the auto-generated V-on-gradient `logo.png` with custom pixel-art artwork (a CRT showing "VOD" with a download arrow into a `.STRM` file). Source kept at `tools/source_logo.png`; `tools/build_logo.py` resizes to 512×512 with NEAREST resampling so the chunky-pixel aesthetic survives downscale.
-
-**v1.9.2** — Display name changed from `VOD2MLIB` to `VOD to Media Library`. Slug, repo URL, install folder name, and Celery task identifiers all unchanged — this is purely a friendly-name change, no migration needed.
-
-**v1.9.1** — Trimmed `[GENERATE] Full rescan` and `[SCHEDULE] Test fire now` descriptions to keep their Run buttons right-aligned (Dispatcharr's UI drops buttons below when descriptions wrap).
-
-**v1.9.0** — NFO titles no longer include the year (Kodi/Jellyfin scrapers prefer just the title). Shared language-prefix regex between `_clean_title` and `_extract_genres` (the AC-130 fix now covers categories too). `_generate_movies` now uses `query.iterator()` so the batch limit is honoured even when most candidates are already-done. Magic numbers promoted to class constants (`MAX_WORKERS`, `LOG_EVERY`, `MAX_FILENAME_LEN`). Class constants grouped at the top of the class. New `[SCHEDULE] Test fire now` action to replay the registered task synchronously. Failed series names now surface in the rescan summary. Cleaner toast on Rescan All. Logged Dispatcharr URL has its host masked. Schedule target validation derived from the manifest field options. New tests/ directory with 45 unit tests.
-
-**v1.8.x** — Section dividers on Settings tab, action labels match the design's renaming map, full-rescan confirm dialog, `[BRACKET]` style headers.
-
-**v1.7.x** — UI clarity: button colors, confirm dialogs in Python class (manifest confirms were ignored by Dispatcharr's runtime), accurate descriptions, `Rescan all` forces refresh-existing.
-
-**v1.6** — Rescan-friendly: per-episode skip, optional M3U re-fetch, `Refresh Existing Series` toggle. Schedule rescans now actually pick up new episodes.
-
-**v1.5** — Submission-ready: `plugin.json` manifest, MIT/attribution, `__init__.py`. Bug fixes: duplicate-year folders, AC-130 over-strip, batch-limit unreachable for series, episode query at DB level, `checkbox` → `boolean`, scan counts unique not relations. Cleanup is now non-destructive (only deletes plugin-created files; user files preserved).
-
-**v1.4** — Cron-driven auto-rescan via `django-celery-beat`. New `Rescan All` action.
-
-**v1.3 and earlier** — see [shedunraid's upstream](https://github.com/shedunraid/VOD2MLIB) for the original v0.x–v1.3 history.
+The bundled logo is reproducible — replace `tools/source_logo.png` and run `python3 tools/build_logo.py` to regenerate `logo.png` at 512×512 with NEAREST resampling (preserves pixel-art crispness).
 
 ## Architecture (for contributors)
 
@@ -125,3 +189,25 @@ The tests don't need Django or a running Dispatcharr — they exercise `_clean_t
 - `plugin.json` is the manifest the [Dispatcharr/Plugins catalogue](https://github.com/Dispatcharr/Plugins) reads. Dispatcharr's runtime reads action metadata from the Python class — the JSON is for the catalogue and pre-enable preview.
 - Schedule registration uses `django-celery-beat`'s `PeriodicTask` + `CrontabSchedule`. The cron-fired task is a module-level `@shared_task` named `vod2mlib.scheduled_rescan` that constructs a fresh `Plugin()` and dispatches.
 - Settings are snapshotted into the PeriodicTask's `kwargs` at Apply-time so the cron runs with deterministic config. Re-click Apply to refresh.
+
+## Changelog
+
+**v1.9.3** — Replaced the auto-generated V-on-gradient `logo.png` with custom pixel-art artwork (a CRT showing "VOD" with a download arrow into a `.STRM` file). Source kept at `tools/source_logo.png`; `tools/build_logo.py` resizes to 512×512 with NEAREST resampling.
+
+**v1.9.2** — Display name changed from `VOD2MLIB` to `VOD to Media Library`. Slug, repo URL, install folder name, and Celery task identifiers all unchanged.
+
+**v1.9.1** — Trimmed `[GENERATE] Full rescan` and `[SCHEDULE] Test fire now` descriptions to keep their Run buttons right-aligned.
+
+**v1.9.0** — NFO titles no longer include the year (Kodi/Jellyfin scrapers prefer just the title). Shared language-prefix regex between `_clean_title` and `_extract_genres`. `_generate_movies` now uses `query.iterator()` so the batch limit is honoured even when most candidates are already-done. Magic numbers promoted to class constants. New `[SCHEDULE] Test fire now` action. Failed series names surface in the rescan summary. New `tests/` directory with 45 unit tests.
+
+**v1.8.x** — Section dividers on Settings tab, action labels match the design's renaming map, full-rescan confirm dialog, `[BRACKET]` style headers.
+
+**v1.7.x** — UI clarity: button colors, confirm dialogs in Python class, accurate descriptions, `Rescan all` forces refresh-existing.
+
+**v1.6** — Rescan-friendly: per-episode skip, optional M3U re-fetch, `Refresh Existing Series` toggle. Schedule rescans now actually pick up new episodes.
+
+**v1.5** — Submission-ready: `plugin.json` manifest, MIT/attribution, `__init__.py`. Bug fixes: duplicate-year folders, AC-130 over-strip, batch-limit unreachable for series, episode query at DB level, `checkbox` → `boolean`, scan counts unique not relations. Cleanup is now non-destructive.
+
+**v1.4** — Cron-driven auto-rescan via `django-celery-beat`. New `Rescan All` action.
+
+**v1.3 and earlier** — see [shedunraid's upstream](https://github.com/shedunraid/VOD2MLIB) for the original v0.x–v1.3 history.
