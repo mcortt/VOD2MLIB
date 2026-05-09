@@ -1,6 +1,6 @@
 # VOD to Media Library — Dispatcharr plugin
 
-> v1.9.2 — slug `vod2mlib` (unchanged)
+> v1.9.3 — slug `vod2mlib` (unchanged)
 
 A Dispatcharr plugin that converts your VOD catalogue into a folder of `.strm` files (with optional NFO metadata) that media servers like Jellyfin, Emby, Kodi, or ChannelsDVR can index and play.
 
@@ -98,6 +98,8 @@ python3 -m pytest tests/ -v
 The tests don't need Django or a running Dispatcharr — they exercise `_clean_title`, `_strip_trailing_year`, `_sanitize_filename`, `_parse_cron`, `_extract_genres`, `_mask_url`, and the path-building helpers in isolation. 45 tests, ~50ms.
 
 ## Changelog
+
+**v1.9.3** — Replaced the auto-generated V-on-gradient `logo.png` with custom pixel-art artwork (a CRT showing "VOD" with a download arrow into a `.STRM` file). Source kept at `tools/source_logo.png`; `tools/build_logo.py` resizes to 512×512 with NEAREST resampling so the chunky-pixel aesthetic survives downscale.
 
 **v1.9.2** — Display name changed from `VOD2MLIB` to `VOD to Media Library`. Slug, repo URL, install folder name, and Celery task identifiers all unchanged — this is purely a friendly-name change, no migration needed.
 
