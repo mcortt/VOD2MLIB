@@ -1,7 +1,6 @@
 """
 VOD2MLIB — VOD .strm Generator Plugin for Dispatcharr
-v1.9.0 — maintenance pass: NFO title fix, shared regex, movie batch refactor,
-         test-fire action, surfaced failures, tunables as class constants, tests
+v1.9.1 — trim two action descriptions to keep buttons right-aligned
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -19,7 +18,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.9.0"
+    version = "1.9.1"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
         "optional NFO metadata, batch processing, and a cron-driven auto-rescan."
@@ -194,7 +193,7 @@ class Plugin:
         {
             "id": "rescan_all",
             "label": "[GENERATE] Full rescan",
-            "description": "Rescan then force regenerate Movies + Series. What cron fires.",
+            "description": "Rescan then force regenerate Movies + Series.",
             "button_label": "Rescan all",
             "button_variant": "filled",
             "button_color": "teal",
@@ -215,7 +214,7 @@ class Plugin:
         {
             "id": "schedule_test_fire",
             "label": "[SCHEDULE] Test fire now",
-            "description": "Run the registered scheduled task synchronously, with the snapshotted settings. Verifies the cron pipeline end-to-end without waiting for the next tick.",
+            "description": "Fire the scheduled task immediately. Verifies the cron pipeline.",
             "button_label": "Test fire",
             "button_variant": "outline",
             "button_color": "blue",

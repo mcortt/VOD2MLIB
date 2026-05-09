@@ -1,5 +1,7 @@
 # VOD2MLIB — Dispatcharr VOD → media library bridge
 
+> v1.9.1
+
 A Dispatcharr plugin that converts your VOD catalogue into a folder of `.strm` files (with optional NFO metadata) that media servers like Jellyfin, Emby, Kodi, or ChannelsDVR can index and play.
 
 ## Credits
@@ -96,6 +98,8 @@ python3 -m pytest tests/ -v
 The tests don't need Django or a running Dispatcharr — they exercise `_clean_title`, `_strip_trailing_year`, `_sanitize_filename`, `_parse_cron`, `_extract_genres`, `_mask_url`, and the path-building helpers in isolation. 45 tests, ~50ms.
 
 ## Changelog
+
+**v1.9.1** — Trimmed `[GENERATE] Full rescan` and `[SCHEDULE] Test fire now` descriptions to keep their Run buttons right-aligned (Dispatcharr's UI drops buttons below when descriptions wrap).
 
 **v1.9.0** — NFO titles no longer include the year (Kodi/Jellyfin scrapers prefer just the title). Shared language-prefix regex between `_clean_title` and `_extract_genres` (the AC-130 fix now covers categories too). `_generate_movies` now uses `query.iterator()` so the batch limit is honoured even when most candidates are already-done. Magic numbers promoted to class constants (`MAX_WORKERS`, `LOG_EVERY`, `MAX_FILENAME_LEN`). Class constants grouped at the top of the class. New `[SCHEDULE] Test fire now` action to replay the registered task synchronously. Failed series names now surface in the rescan summary. Cleaner toast on Rescan All. Logged Dispatcharr URL has its host masked. Schedule target validation derived from the manifest field options. New tests/ directory with 45 unit tests.
 
