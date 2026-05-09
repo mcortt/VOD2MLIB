@@ -1,6 +1,6 @@
 """
 VOD2MLIB — VOD .strm Generator Plugin for Dispatcharr
-v1.6.0 — rescan-friendly: per-episode skip, optional M3U re-fetch, refresh-existing toggle
+v1.7.0 — UI clarity: button styling + confirm dialogs + accurate descriptions, rescan_all forces refresh
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -18,7 +18,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD2MLIB"
-    version = "1.6.0"
+    version = "1.7.0"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files. "
         "Map a host folder to /VODS in your Dispatcharr container, then click "
@@ -29,6 +29,12 @@ class Plugin:
     )
     
     fields = [
+        {
+            "id": "_about",
+            "label": "About",
+            "type": "info",
+            "description": "Workflow:\n  1. Configure Root Folders + Dispatcharr URL below.\n  2. Actions tab → Scan → see catalogue totals.\n  3. Actions tab → Generate Movies / Generate Series (start with Batch Size 10 to verify).\n  4. (Optional) For nightly auto-updates: turn ON 'Refresh Existing Series', set the cron schedule, and click Apply Schedule.\n\nDocs and source: https://github.com/R3XCHRIS/VOD2MLIB",
+        },
         {
             "id": "root_folder",
             "label": "Root Folder for Movies",
@@ -127,49 +133,91 @@ class Plugin:
     actions = [
         {
             "id": "scan_all_vods",
-            "label": "Scan for VODs to Convert",
-            "description": "Show total movies and series available in Dispatcharr"
+            "label": "[Scan] Show catalogue totals",
+            "description": "Read-only. Counts unique Movies and Series in Dispatcharr's database. No files written.",
+            "button_label": "Scan",
+            "button_variant": "outline",
+            "button_color": "blue",
         },
         {
             "id": "generate_movies",
-            "label": "Generate Movie .strm Files",
-            "description": "Process movies according to batch size"
+            "label": "[Generate] Movie .strm files",
+            "description": "Process movies according to Batch Size. Existing .strm files are skipped — click again to continue from where the last batch ended.",
+            "button_label": "Generate Movies",
+            "button_variant": "filled",
+            "button_color": "green",
         },
         {
             "id": "generate_series",
-            "label": "Generate Series .strm Files",
-            "description": "Fetch episodes + create .strm files (auto-fetch per series)"
-        },
-        {
-            "id": "cleanup_movies",
-            "label": "Clean Up Movies",
-            "description": "⚠️ Remove all movie folders and .strm files"
-        },
-        {
-            "id": "cleanup_series",
-            "label": "Clean Up Series",
-            "description": "⚠️ Remove all series folders and .strm files"
+            "label": "[Generate] Series .strm files",
+            "description": "Create .strm files for series episodes (3 parallel workers). Already-processed series are skipped unless 'Refresh Existing Series' is on, in which case missing episodes are added.",
+            "button_label": "Generate Series",
+            "button_variant": "filled",
+            "button_color": "green",
         },
         {
             "id": "rescan_all",
-            "label": "Rescan All (Movies + Series)",
-            "description": "One-shot full rescan: scan totals, then generate movies, then series. This is what the cron schedule calls."
-        },
-        {
-            "id": "apply_schedule",
-            "label": "Apply Schedule",
-            "description": "Register/update the periodic auto-rescan task using the cron expression in settings."
-        },
-        {
-            "id": "remove_schedule",
-            "label": "Remove Schedule",
-            "description": "Unregister the periodic auto-rescan task."
+            "label": "[Rescan] All (Movies + Series)",
+            "description": "Run scan, then generate movies, then series — with Refresh Existing forced ON regardless of the global setting. Same action that the cron schedule fires; safe to click manually for a full refresh.",
+            "button_label": "Rescan All",
+            "button_variant": "filled",
+            "button_color": "teal",
         },
         {
             "id": "schedule_status",
-            "label": "Show Schedule Status",
-            "description": "Show whether a scheduled rescan is registered, and what cron expression it uses."
-        }
+            "label": "[Schedule] Show status",
+            "description": "Show the registered cron expression, last run time, and total runs.",
+            "button_label": "Status",
+            "button_variant": "outline",
+            "button_color": "blue",
+        },
+        {
+            "id": "apply_schedule",
+            "label": "[Schedule] Apply",
+            "description": "Register or update a periodic auto-rescan task using the current cron and settings. The current settings are snapshotted at click-time — re-click after changing any setting to refresh the snapshot.",
+            "button_label": "Apply",
+            "button_variant": "outline",
+            "button_color": "blue",
+        },
+        {
+            "id": "remove_schedule",
+            "label": "[Schedule] Remove",
+            "description": "Unregister the periodic auto-rescan task.",
+            "button_label": "Remove",
+            "button_variant": "outline",
+            "button_color": "orange",
+            "confirm": {
+                "required": True,
+                "title": "Remove auto-rescan schedule?",
+                "message": "This unregisters the periodic task. You can re-create it any time with Apply.",
+            },
+        },
+        {
+            "id": "cleanup_movies",
+            "label": "[⚠️ Cleanup] Movies",
+            "description": "Remove .strm and .nfo files this plugin created from the movies root. User-added files (subtitles, posters, custom .nfo) are preserved; folders are removed only if empty.",
+            "button_label": "Clean Up Movies",
+            "button_variant": "filled",
+            "button_color": "red",
+            "confirm": {
+                "required": True,
+                "title": "Delete generated movie files?",
+                "message": "This deletes every .strm and .nfo file this plugin created under your Movies root. User-added files (subtitles, posters, custom .nfo) in those folders are preserved. Continue?",
+            },
+        },
+        {
+            "id": "cleanup_series",
+            "label": "[⚠️ Cleanup] Series",
+            "description": "Remove .strm and .nfo files this plugin created from the series root. User-added files preserved; empty Season folders and series folders are removed.",
+            "button_label": "Clean Up Series",
+            "button_variant": "filled",
+            "button_color": "red",
+            "confirm": {
+                "required": True,
+                "title": "Delete generated series files?",
+                "message": "This deletes every .strm and .nfo file this plugin created under your Series root. User-added files in those folders are preserved. Continue?",
+            },
+        },
     ]
     
     def run(self, action: str, params: dict, context: dict):
@@ -1112,8 +1160,14 @@ class Plugin:
         return name or "Unknown"
 
     def _rescan_all(self, settings: Dict[str, Any], logger):
-        """Combined scan + generate movies + generate series. Used by the cron schedule."""
-        logger.info("Combined rescan: scan + movies + series")
+        """Combined scan + generate movies + generate series. Used by the cron schedule.
+
+        Always runs the series step with refresh_existing forced ON regardless of
+        the saved setting, so cron rescans (and manual Rescan All clicks) reliably
+        pick up new episodes for already-processed series. Movies are unaffected
+        (they're idempotent at the .strm-file level already).
+        """
+        logger.info("Combined rescan: scan + movies + series (Refresh Existing forced ON for series)")
         logger.info("")
 
         scan = self._scan_all_vods(settings, logger)
@@ -1128,9 +1182,10 @@ class Plugin:
 
         logger.info("")
         logger.info("=" * 60)
-        logger.info("Rescan: series")
+        logger.info("Rescan: series  (refresh_existing=True)")
         logger.info("=" * 60)
-        series = self._generate_series(settings, logger)
+        series_settings = {**settings, "refresh_existing": True}
+        series = self._generate_series(series_settings, logger)
 
         movie_msg = movies.get("message", "movies skipped")
         series_msg = series.get("message", "series skipped")
@@ -1209,12 +1264,23 @@ class Plugin:
         logger.info("")
         logger.info("Note: re-run 'Apply Schedule' after changing settings to refresh the snapshot.")
 
+        warning = ""
+        refresh_on = bool(snapshot.get("refresh_existing", False))
+        if target == "generate_series" and not refresh_on:
+            warning = (
+                " ⚠️ 'Refresh Existing Series' is OFF — cron will only ADD new series, "
+                "not pick up new episodes for already-processed series. "
+                "Turn it ON and re-Apply for true auto-rescans, or use target 'rescan_all' which forces it ON."
+            )
+            logger.warning(warning.strip())
+
         return {
             "status": "ok",
-            "message": f"{verb} periodic task '{self.SCHEDULE_TASK_NAME}' for cron '{cron_expr}' → {target}",
+            "message": f"{verb} periodic task '{self.SCHEDULE_TASK_NAME}' for cron '{cron_expr}' → {target}.{warning}",
             "created": created,
             "cron": cron_expr,
             "target": target,
+            "refresh_existing_in_snapshot": refresh_on,
         }
 
     def _remove_schedule(self, settings: Dict[str, Any], logger):

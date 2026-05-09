@@ -1,4 +1,4 @@
-# VOD2MLIB — VOD → Media-Library .strm Generator (v1.6)
+# VOD2MLIB — VOD → Media-Library .strm Generator (v1.7)
 
 Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Plex, Jellyfin, Emby, Kodi) with optional NFO metadata, batch processing, and scheduled auto-rescan.
 
@@ -7,6 +7,18 @@ Convert Dispatcharr's VOD catalogue into media-server-friendly `.strm` files (Pl
 - **Original author:** [shedunraid](https://github.com/shedunraid) — created v0.x–v1.3 ([upstream repo](https://github.com/shedunraid/VOD2MLIB)).
 - **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, and submission to the official Dispatcharr Plugins repo. The upstream has been dormant since early 2026; this fork continues maintenance.
 - Distributed under the MIT License.
+
+## What's New in v1.7
+
+UI clarity pass — the Actions panel was confusing in v1.6 (misleading descriptions, no confirm dialogs, mixed concerns). Fixes:
+
+- **Action labels now use `[Section]` prefixes** to visually group: `[Scan]`, `[Generate]`, `[Rescan]`, `[Schedule]`, `[⚠️ Cleanup]`. The flat list now reads top-to-bottom in workflow order.
+- **Confirm dialogs actually work** for destructive actions (`Cleanup Movies`, `Cleanup Series`, `Remove Schedule`). Earlier versions declared confirms in `plugin.json` but the runtime ignores manifest actions — now they live in the Python class where Dispatcharr reads them.
+- **Accurate descriptions.** Cleanup descriptions no longer claim to "remove all folders" — they correctly describe the v1.5+ selective behavior. Generate descriptions explain the skip semantics. Apply Schedule mentions the snapshot rule.
+- **`Rescan All` now forces `Refresh Existing Series` ON** regardless of the saved setting. The action's name promised rescan; the implementation now matches. The global `Refresh Existing Series` setting still applies to the individual `Generate Series` action for fast manual iteration.
+- **`Apply Schedule` warns** when you schedule `generate_series` with `Refresh Existing Series` OFF — the cron would silently fail to pick up new episodes. The warning appears in both the toast and the log.
+- **Buttons now have colors and labels** — Generate (green filled), Rescan (teal filled), Cleanup (red filled with confirm), Schedule status/apply (blue outline), Remove Schedule (orange outline with confirm).
+- **New `About` info field** at the top of Settings explaining the workflow.
 
 ## What's New in v1.6
 
