@@ -572,3 +572,169 @@ class TestMovieTargetPaths:
         assert folder == "/VODS/Movies/Mystery Title"
         assert strm == "Mystery Title.strm"
         assert year is None
+
+
+# ---------- nesting by category ----------
+
+class TestCategorySubfolder:
+    def test_nest_off_returns_empty(self, p):
+        assert p._category_subfolder("Action", nest=False) == ""
+        assert p._category_subfolder("", nest=False) == ""
+
+    def test_nest_on_with_category(self, p):
+        # Raw category preserved (just sanitised for filesystem)
+        assert p._category_subfolder("Action", nest=True) == "Action"
+        assert p._category_subfolder("EN - Action (movie)", nest=True) == "EN - Action (movie)"
+
+    def test_nest_on_no_category_returns_unassigned(self, p):
+        assert p._category_subfolder("", nest=True) == "Unassigned"
+        assert p._category_subfolder(None, nest=True) == "Unassigned"
+        assert p._category_subfolder("   ", nest=True) == "Unassigned"
+
+    def test_nest_on_sanitises_invalid_chars(self, p):
+        # Slashes and other invalid filesystem chars must be stripped (and the
+        # surrounding whitespace then collapsed by the sanitiser)
+        assert p._category_subfolder("Action / Drama", nest=True) == "Action Drama"
+        assert "/" not in p._category_subfolder("a/b", nest=True)
+        assert "\\" not in p._category_subfolder("a\\b", nest=True)
+
+
+class TestMovieTargetPathsNested:
+    class _M:
+        id = 1
+        uuid = "abc"
+        name = "Aladdin"
+        year = 1992
+
+    def test_nest_off_unchanged(self, p):
+        folder, _, _, _ = p._movie_target_paths(self._M(), "/VODS/Movies", "Action", nest=False)
+        assert folder == "/VODS/Movies/Aladdin (1992)"
+
+    def test_nest_on_with_category(self, p):
+        folder, _, _, _ = p._movie_target_paths(self._M(), "/VODS/Movies", "Action", nest=True)
+        assert folder == "/VODS/Movies/Action/Aladdin (1992)"
+
+    def test_nest_on_empty_category(self, p):
+        folder, _, _, _ = p._movie_target_paths(self._M(), "/VODS/Movies", "", nest=True)
+        assert folder == "/VODS/Movies/Unassigned/Aladdin (1992)"
+
+    def test_nest_on_raw_category_preserved(self, p):
+        # Raw category — even ugly ones go in verbatim (per design choice 1)
+        folder, _, _, _ = p._movie_target_paths(self._M(), "/VODS/Movies", "EN - Action (movie)", nest=True)
+        assert folder == "/VODS/Movies/EN - Action (movie)/Aladdin (1992)"
+
+
+class TestSeriesTargetFolderNested:
+    class _S:
+        id = 1
+        uuid = "abc"
+        name = "Tidelands"
+        year = 2018
+
+    def test_nest_off_unchanged(self, p):
+        folder, _, _ = p._series_target_folder(self._S(), "/VODS/Series", "Drama", nest=False)
+        assert folder == "/VODS/Series/Tidelands (2018)"
+
+    def test_nest_on_with_category(self, p):
+        folder, _, _ = p._series_target_folder(self._S(), "/VODS/Series", "Drama", nest=True)
+        assert folder == "/VODS/Series/Drama/Tidelands (2018)"
+
+    def test_nest_on_empty_category(self, p):
+        folder, _, _ = p._series_target_folder(self._S(), "/VODS/Series", "", nest=True)
+        assert folder == "/VODS/Series/Unassigned/Tidelands (2018)"
+
+
+# ---------- cleanup walk ----------
+
+class TestWalkAndCleanup:
+    """Tests _walk_and_cleanup_plugin_files against real temp dirs.
+
+    Uses tmp_path (pytest builtin) — covers both flat and nested layouts and
+    the user-files-preserved case.
+    """
+
+    def test_flat_layout_cleaned(self, p, tmp_path):
+        log = CapturingLogger()
+        # Movies/Aladdin (1992)/{.strm, .nfo}
+        movie = tmp_path / "Aladdin (1992)"
+        movie.mkdir()
+        (movie / "Aladdin (1992).strm").write_text("http://...")
+        (movie / "Aladdin (1992).nfo").write_text("<movie/>")
+
+        r = p._walk_and_cleanup_plugin_files(str(tmp_path), log)
+        assert r["deleted_strm"] == 1
+        assert r["deleted_nfo"] == 1
+        assert r["removed_dirs"] == 1
+        assert r["errors"] == 0
+        assert not movie.exists()
+        assert tmp_path.exists()  # root preserved
+
+    def test_nested_layout_cleaned(self, p, tmp_path):
+        log = CapturingLogger()
+        # Movies/Action/Aladdin (1992)/{.strm, .nfo}
+        cat = tmp_path / "Action"
+        cat.mkdir()
+        movie = cat / "Aladdin (1992)"
+        movie.mkdir()
+        (movie / "Aladdin (1992).strm").write_text("http://...")
+        (movie / "Aladdin (1992).nfo").write_text("<movie/>")
+
+        r = p._walk_and_cleanup_plugin_files(str(tmp_path), log)
+        assert r["deleted_strm"] == 1
+        assert r["deleted_nfo"] == 1
+        # Both the movie folder AND the category folder removed (both empty)
+        assert r["removed_dirs"] == 2
+        assert not cat.exists()
+        assert tmp_path.exists()
+
+    def test_series_with_seasons(self, p, tmp_path):
+        log = CapturingLogger()
+        # Series/Tidelands/{tvshow.nfo, Season 01/{strm, nfo}}
+        series = tmp_path / "Tidelands"
+        series.mkdir()
+        (series / "tvshow.nfo").write_text("<tvshow/>")
+        season = series / "Season 01"
+        season.mkdir()
+        (season / "ep1.strm").write_text("http://...")
+        (season / "ep1.nfo").write_text("<episodedetails/>")
+
+        r = p._walk_and_cleanup_plugin_files(str(tmp_path), log)
+        assert r["deleted_strm"] == 1
+        assert r["deleted_nfo"] == 2  # episode.nfo + tvshow.nfo
+        assert r["removed_dirs"] == 2  # Season 01 + series folder
+
+    def test_user_files_preserved(self, p, tmp_path):
+        log = CapturingLogger()
+        movie = tmp_path / "Aladdin (1992)"
+        movie.mkdir()
+        (movie / "Aladdin (1992).strm").write_text("http://...")
+        (movie / "Aladdin (1992).nfo").write_text("<movie/>")
+        # User added files
+        (movie / "poster.jpg").write_text("not a real image")
+        (movie / "Aladdin (1992).en.srt").write_text("subtitles")
+
+        r = p._walk_and_cleanup_plugin_files(str(tmp_path), log)
+        assert r["deleted_strm"] == 1
+        assert r["deleted_nfo"] == 1
+        assert r["removed_dirs"] == 0  # movie folder preserved (user files inside)
+        assert r["preserved_dirs"] >= 1
+        assert movie.exists()
+        assert (movie / "poster.jpg").exists()
+        assert (movie / "Aladdin (1992).en.srt").exists()
+
+    def test_nonexistent_root_no_error(self, p, tmp_path):
+        log = CapturingLogger()
+        missing = tmp_path / "does-not-exist"
+        r = p._walk_and_cleanup_plugin_files(str(missing), log)
+        assert r["errors"] == 0
+        assert r["deleted_strm"] == 0
+
+    def test_root_itself_never_removed(self, p, tmp_path):
+        log = CapturingLogger()
+        # Tree that becomes entirely empty
+        (tmp_path / "Aladdin (1992)").mkdir()
+        (tmp_path / "Aladdin (1992)" / "Aladdin (1992).strm").write_text("x")
+        r = p._walk_and_cleanup_plugin_files(str(tmp_path), log)
+        # Root must still exist
+        assert tmp_path.exists()
+        assert r["removed_dirs"] == 1  # only the Aladdin folder, not the root

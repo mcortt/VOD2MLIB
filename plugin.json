@@ -1,6 +1,6 @@
 {
   "name": "VOD to Media Library",
-  "version": "1.10.1",
+  "version": "1.11.0",
   "description": "VOD → media library bridge. Generates .strm + NFO files from Dispatcharr's VOD catalogue, with optional cron-driven auto-rescan that picks up newly-added episodes.",
   "author": "R3XCHRIS",
   "license": "MIT",
@@ -71,6 +71,13 @@
       "help_text": "Create .nfo metadata files alongside each movie .strm."
     },
     {
+      "id": "nest_movies_by_category",
+      "label": "Nest Movies by Category",
+      "type": "boolean",
+      "default": false,
+      "help_text": "Wrap each movie's folder inside a subfolder named by its M3U category. Useful when your provider organises movies by genre. Movies without a category go into a folder named 'Unassigned'. Same content with different categories (e.g. 4K vs HD) gets separate folders intentionally."
+    },
+    {
       "id": "_section_series",
       "label": "[SERIES]",
       "type": "info",
@@ -103,6 +110,13 @@
       "type": "boolean",
       "default": false,
       "help_text": "Re-evaluate series that already have folders, picking up new episodes added upstream. Off = fast manual iteration (skip done series); On = scan everything for new content. Turn ON before clicking Apply Schedule for cron rescans of target 'generate_series'. Note: 'rescan_all' forces this ON regardless."
+    },
+    {
+      "id": "nest_series_by_category",
+      "label": "Nest Series by Category",
+      "type": "boolean",
+      "default": false,
+      "help_text": "Wrap each series' folder inside a subfolder named by its M3U category. Useful when your provider organises series by genre. Series without a category go into a folder named 'Unassigned'. Same content with different categories gets separate folders intentionally."
     },
     {
       "id": "_section_schedule",

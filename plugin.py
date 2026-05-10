@@ -1,9 +1,8 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.10.1 — suppress year-bucket category names ('2026 Movies') as fake
-          genres; let media servers fetch real genre via the tmdbid we
-          already emit
+v1.11.0 — optional category-nested folder layout (Movies & Series);
+          cleanup refactored to walk recursively for both layouts
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -21,7 +20,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.10.1"
+    version = "1.11.0"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
         "optional NFO metadata, batch processing, and a cron-driven auto-rescan."
@@ -122,6 +121,13 @@ class Plugin:
             "help_text": "Create .nfo metadata files for movies"
         },
         {
+            "id": "nest_movies_by_category",
+            "label": "Nest Movies by Category",
+            "type": "boolean",
+            "default": False,
+            "help_text": "Wrap each movie's folder inside a subfolder named by its M3U category. Useful when your provider organises movies by genre. Movies without a category go into a folder named 'Unassigned'. Same content with different categories (e.g. 4K vs HD) gets separate folders intentionally."
+        },
+        {
             "id": "_section_series",
             "label": "[SERIES]",
             "type": "info",
@@ -154,6 +160,13 @@ class Plugin:
             "type": "boolean",
             "default": False,
             "help_text": "Re-evaluate series that already have folders, picking up new episodes added upstream. Turn ON for cron rescans."
+        },
+        {
+            "id": "nest_series_by_category",
+            "label": "Nest Series by Category",
+            "type": "boolean",
+            "default": False,
+            "help_text": "Wrap each series' folder inside a subfolder named by its M3U category. Useful when your provider organises series by genre. Series without a category go into a folder named 'Unassigned'. Same content with different categories gets separate folders intentionally."
         },
         {
             "id": "_section_schedule",
@@ -359,8 +372,27 @@ class Plugin:
             logger.error("Scan failed: %s", e)
             return {"status": "error", "message": f"Scan error: {e}"}
     
-    def _movie_target_paths(self, movie, root_folder: str):
-        """Compute the (folder_path, strm_filename, clean_name, year) for a movie."""
+    def _category_subfolder(self, category_name: str, nest: bool) -> str:
+        """Return the category subfolder segment to insert into a path.
+
+        Returns "" when nest is False (caller should not insert a layer).
+        Returns the sanitised raw category name when nest is True and a
+        category is provided. Returns "Unassigned" when nest is True but
+        no category is available.
+        """
+        if not nest:
+            return ""
+        cat = (category_name or "").strip()
+        if not cat:
+            return "Unassigned"
+        return self._sanitize_filename(cat)
+
+    def _movie_target_paths(self, movie, root_folder: str, category_name: str = "", nest: bool = False):
+        """Compute the (folder_path, strm_filename, clean_name, year) for a movie.
+
+        When nest=True the folder is wrapped in a category subfolder named
+        by the raw M3U category (or 'Unassigned' if none).
+        """
         raw_name = movie.name or f"Unknown Movie {movie.id}"
         clean_name = self._clean_title(raw_name)
         clean_name, title_year = self._strip_trailing_year(clean_name)
@@ -372,7 +404,12 @@ class Plugin:
         else:
             folder_name = safe
             strm_filename = f"{safe}.strm"
-        return os.path.join(root_folder, folder_name), strm_filename, clean_name, year
+        cat_segment = self._category_subfolder(category_name, nest)
+        if cat_segment:
+            folder_path = os.path.join(root_folder, cat_segment, folder_name)
+        else:
+            folder_path = os.path.join(root_folder, folder_name)
+        return folder_path, strm_filename, clean_name, year
 
     def _generate_movies(self, settings: Dict[str, Any], logger):
         """Generate movie .strm files according to batch size.
@@ -385,6 +422,7 @@ class Plugin:
         dispatcharr_url = (settings.get("dispatcharr_url") or "").rstrip("/")
         batch_size = settings.get("batch_size") or "250"
         generate_nfo = settings.get("generate_nfo", True)
+        nest_by_cat = bool(settings.get("nest_movies_by_category", False))
 
         ok, err = self._validate_dispatcharr_url(dispatcharr_url, logger)
         if not ok:
@@ -396,6 +434,7 @@ class Plugin:
             "Dispatcharr URL": self._mask_url(dispatcharr_url),
             "Batch Size": batch_size,
             "Generate NFO": "Yes" if generate_nfo else "No",
+            "Nest by category": "Yes" if nest_by_cat else "No",
         })
 
         try:
@@ -432,7 +471,10 @@ class Plugin:
         for relation in query.iterator():
             scanned += 1
             movie = relation.movie
-            movie_folder, strm_filename, movie_name, year = self._movie_target_paths(movie, root_folder)
+            cat_name = relation.category.name if relation.category else ""
+            movie_folder, strm_filename, movie_name, year = self._movie_target_paths(
+                movie, root_folder, cat_name, nest_by_cat,
+            )
             strm_path = os.path.join(movie_folder, strm_filename)
 
             if os.path.exists(strm_path):
@@ -500,14 +542,21 @@ class Plugin:
             "errors": errors,
         }
     
-    def _series_target_folder(self, series, series_root: str):
-        """Compute the target folder for a series. Returns (folder_path, clean_name, year)."""
+    def _series_target_folder(self, series, series_root: str, category_name: str = "", nest: bool = False):
+        """Compute the target folder for a series. Returns (folder_path, clean_name, year).
+
+        When nest=True the folder is wrapped in a category subfolder named
+        by the raw M3U category (or 'Unassigned' if none).
+        """
         raw_name = series.name or f"Unknown Series {series.id}"
         clean_name = self._clean_title(raw_name)
         clean_name, title_year = self._strip_trailing_year(clean_name)
         year = series.year or title_year
         safe = self._sanitize_filename(clean_name)
         folder_name = f"{safe} ({year})" if year else safe
+        cat_segment = self._category_subfolder(category_name, nest)
+        if cat_segment:
+            return os.path.join(series_root, cat_segment, folder_name), clean_name, year
         return os.path.join(series_root, folder_name), clean_name, year
 
     def _series_already_processed(self, series_folder: str) -> bool:
@@ -529,6 +578,7 @@ class Plugin:
         batch_size = settings.get("series_batch_size") or "10"
         generate_nfo = settings.get("generate_series_nfo", True)
         refresh_existing = bool(settings.get("refresh_existing", False))
+        nest_by_cat = bool(settings.get("nest_series_by_category", False))
 
         ok, err = self._validate_dispatcharr_url(dispatcharr_url, logger)
         if not ok:
@@ -541,6 +591,7 @@ class Plugin:
             "Batch Size": batch_size,
             "Generate NFO": "Yes" if generate_nfo else "No",
             "Refresh Existing": "Yes" if refresh_existing else "No",
+            "Nest by category": "Yes" if nest_by_cat else "No",
             "Workers": self.MAX_WORKERS,
         })
 
@@ -581,7 +632,10 @@ class Plugin:
         for series_rel in query.iterator():
             scanned += 1
             if not refresh_existing:
-                folder, _, _ = self._series_target_folder(series_rel.series, series_root)
+                cat_name = series_rel.category.name if series_rel.category else ""
+                folder, _, _ = self._series_target_folder(
+                    series_rel.series, series_root, cat_name, nest_by_cat,
+                )
                 if self._series_already_processed(folder):
                     continue
             to_process.append(series_rel)
@@ -626,6 +680,7 @@ class Plugin:
                     series_root,
                     logger,
                     refresh_existing,
+                    nest_by_cat,
                 ): series_rel
                 for series_rel in to_process
             }
@@ -691,19 +746,25 @@ class Plugin:
             "failures": failures,
         }
     
-    def _process_single_series(self, series_rel, dispatcharr_url, generate_nfo, series_root, logger, refresh_existing=False):
+    def _process_single_series(self, series_rel, dispatcharr_url, generate_nfo, series_root, logger, refresh_existing=False, nest_by_cat=False):
         """Process a single series. Idempotent: writes only missing episode files.
 
         With refresh_existing=False, callers should pre-filter already-done
         series for performance. With refresh_existing=True, every series is
         re-evaluated and the M3U source is re-fetched so newly-aired episodes
         are picked up.
+
+        When nest_by_cat=True the series folder is wrapped in a subfolder
+        named by the M3U category (raw, sanitised) or 'Unassigned'.
         """
         from apps.vod.models import M3UEpisodeRelation
         from apps.vod.tasks import refresh_series_episodes
 
         series = series_rel.series
-        series_folder, series_name, _year = self._series_target_folder(series, series_root)
+        cat_name = series_rel.category.name if series_rel.category else ""
+        series_folder, series_name, _year = self._series_target_folder(
+            series, series_root, cat_name, nest_by_cat,
+        )
 
         try:
             custom_props = series_rel.custom_properties or {}
@@ -849,6 +910,54 @@ class Plugin:
         except OSError:
             return False
 
+    def _walk_and_cleanup_plugin_files(self, root: str, logger):
+        """Recursively delete .strm/.nfo files under root, then bottom-up
+        remove any directory that ends up empty (preserves root and any
+        directory that still contains user-added files).
+
+        Works for both flat (Movies/X/...) and nested (Movies/Cat/X/...)
+        layouts because we walk the whole tree.
+        """
+        result = {
+            "deleted_strm": 0,
+            "deleted_nfo": 0,
+            "removed_dirs": 0,
+            "preserved_dirs": 0,
+            "errors": 0,
+            "scanned_dirs": 0,
+        }
+        if not os.path.isdir(root):
+            return result
+
+        # Pass 1: top-down — remove plugin files
+        for dirpath, _, filenames in os.walk(root):
+            result["scanned_dirs"] += 1
+            for name in filenames:
+                if not name.endswith(self._PLUGIN_FILE_SUFFIXES):
+                    continue
+                path = os.path.join(dirpath, name)
+                try:
+                    os.remove(path)
+                    if name.endswith('.strm'):
+                        result["deleted_strm"] += 1
+                    else:
+                        result["deleted_nfo"] += 1
+                except OSError as e:
+                    logger.error("Failed to delete %s: %s", path, e)
+                    result["errors"] += 1
+
+        # Pass 2: bottom-up — rmdir any directory that is now empty.
+        # We never remove the root itself.
+        root_real = os.path.realpath(root)
+        for dirpath, _, _ in os.walk(root, topdown=False):
+            if os.path.realpath(dirpath) == root_real:
+                continue
+            if self._try_rmdir(dirpath):
+                result["removed_dirs"] += 1
+            else:
+                result["preserved_dirs"] += 1
+        return result
+
     def _log_config(self, logger, items: Dict[str, Any]) -> None:
         """Log a 'Configuration:' block with key/value pairs."""
         logger.info("")
@@ -906,8 +1015,9 @@ class Plugin:
     def _cleanup_movies(self, settings: Dict[str, Any], logger):
         """Delete plugin-generated .strm and .nfo files under the movies root.
 
-        Folders that still contain user-added files (subtitles, posters, etc.)
-        are preserved; folders that become empty are removed.
+        Walks recursively so this works for both flat (Movies/X/...) and
+        nested (Movies/Category/X/...) layouts. Empty folders are removed
+        bottom-up; folders with user-added files are preserved.
         """
         root_folder = settings.get("root_folder", "/VODS/Movies")
 
@@ -919,61 +1029,33 @@ class Plugin:
 
         if not os.path.exists(root_folder):
             logger.info("Root folder doesn't exist. Nothing to clean up.")
-            return {"status": "ok", "message": "Root folder doesn't exist", "deleted_folders": 0, "deleted_strm": 0, "deleted_nfo": 0}
+            return {"status": "ok", "message": "Root folder doesn't exist", "deleted_strm": 0, "deleted_nfo": 0, "removed_dirs": 0, "preserved_dirs": 0, "errors": 0}
 
-        try:
-            entries = sorted(os.listdir(root_folder))
-        except OSError as e:
-            return {"status": "error", "message": f"Cannot list {root_folder}: {e}"}
-
-        deleted_folders = deleted_strm = deleted_nfo = preserved = errors = 0
-        scanned = 0
-        for item in entries:
-            item_path = os.path.join(root_folder, item)
-            if not os.path.isdir(item_path):
-                continue
-            scanned += 1
-            strm, nfo, err = self._delete_plugin_files_in_dir(item_path, logger)
-            deleted_strm += strm
-            deleted_nfo += nfo
-            errors += err
-            if (strm + nfo) > 0:
-                if self._try_rmdir(item_path):
-                    deleted_folders += 1
-                else:
-                    preserved += 1
-                    logger.info("Preserved (user files remain): %s", item)
+        r = self._walk_and_cleanup_plugin_files(root_folder, logger)
 
         logger.info("")
         logger.info("=" * 60)
         logger.info("CLEANUP SUMMARY")
-        logger.info("  Folders scanned:   %d", scanned)
-        logger.info("  Folders removed:   %d", deleted_folders)
-        logger.info("  Folders preserved: %d  (user-added files inside)", preserved)
-        logger.info("  .strm deleted:     %d", deleted_strm)
-        logger.info("  .nfo deleted:      %d", deleted_nfo)
-        logger.info("  Errors:            %d", errors)
+        logger.info("  Dirs scanned:    %d", r["scanned_dirs"])
+        logger.info("  Dirs removed:    %d", r["removed_dirs"])
+        logger.info("  Dirs preserved:  %d  (user-added files inside)", r["preserved_dirs"])
+        logger.info("  .strm deleted:   %d", r["deleted_strm"])
+        logger.info("  .nfo deleted:    %d", r["deleted_nfo"])
+        logger.info("  Errors:          %d", r["errors"])
         logger.info("=" * 60)
 
-        msg = f"Deleted {deleted_strm} .strm + {deleted_nfo} .nfo, removed {deleted_folders} folders"
-        if preserved:
-            msg += f", preserved {preserved} (user files)"
-        return {
-            "status": "ok",
-            "message": msg,
-            "deleted_folders": deleted_folders,
-            "deleted_strm": deleted_strm,
-            "deleted_nfo": deleted_nfo,
-            "preserved_folders": preserved,
-            "errors": errors,
-        }
+        msg = f"Deleted {r['deleted_strm']} .strm + {r['deleted_nfo']} .nfo, removed {r['removed_dirs']} folders"
+        if r["preserved_dirs"]:
+            msg += f", preserved {r['preserved_dirs']} (user files)"
+        return {"status": "ok", "message": msg, **r}
 
     def _cleanup_series(self, settings: Dict[str, Any], logger):
         """Delete plugin-generated .strm and .nfo files under the series root.
 
-        Walks Season/* subfolders. Season folders that become empty are removed,
-        then series folders that become empty (no Season subdirs and no other
-        files) are removed too. Folders with user-added files are preserved.
+        Walks recursively so this works for both flat (Series/X/Season..) and
+        nested (Series/Category/X/Season..) layouts. Empty folders (Season,
+        series, category) are removed bottom-up. Folders with user-added
+        files are preserved.
         """
         series_root = settings.get("series_root_folder", "/VODS/Series")
 
@@ -985,79 +1067,25 @@ class Plugin:
 
         if not os.path.exists(series_root):
             logger.info("Series root doesn't exist. Nothing to clean up.")
-            return {"status": "ok", "message": "Series root doesn't exist", "deleted": 0}
+            return {"status": "ok", "message": "Series root doesn't exist", "deleted_strm": 0, "deleted_nfo": 0, "removed_dirs": 0, "preserved_dirs": 0, "errors": 0}
 
-        try:
-            entries = sorted(os.listdir(series_root))
-        except OSError as e:
-            return {"status": "error", "message": f"Cannot list {series_root}: {e}"}
-
-        deleted_strm = deleted_nfo = errors = 0
-        seasons_removed = series_removed = preserved = 0
-
-        for series_name in entries:
-            series_path = os.path.join(series_root, series_name)
-            if not os.path.isdir(series_path):
-                continue
-
-            try:
-                sub_entries = os.listdir(series_path)
-            except OSError as e:
-                logger.error("Cannot list %s: %s", series_path, e)
-                errors += 1
-                continue
-
-            for sub in sub_entries:
-                sub_path = os.path.join(series_path, sub)
-                if os.path.isdir(sub_path) and sub.startswith("Season"):
-                    strm, nfo, err = self._delete_plugin_files_in_dir(sub_path, logger)
-                    deleted_strm += strm
-                    deleted_nfo += nfo
-                    errors += err
-                    if self._try_rmdir(sub_path):
-                        seasons_removed += 1
-
-            tvshow_path = os.path.join(series_path, "tvshow.nfo")
-            if os.path.isfile(tvshow_path):
-                try:
-                    os.remove(tvshow_path)
-                    deleted_nfo += 1
-                except OSError as e:
-                    logger.error("Failed to delete %s: %s", tvshow_path, e)
-                    errors += 1
-
-            if self._try_rmdir(series_path):
-                series_removed += 1
-            else:
-                preserved += 1
+        r = self._walk_and_cleanup_plugin_files(series_root, logger)
 
         logger.info("")
         logger.info("=" * 60)
         logger.info("CLEANUP SUMMARY")
-        logger.info("  Series removed:      %d", series_removed)
-        logger.info("  Series preserved:    %d  (user-added files inside)", preserved)
-        logger.info("  Season dirs removed: %d", seasons_removed)
-        logger.info("  .strm deleted:       %d", deleted_strm)
-        logger.info("  .nfo deleted:        %d", deleted_nfo)
-        logger.info("  Errors:              %d", errors)
+        logger.info("  Dirs scanned:    %d", r["scanned_dirs"])
+        logger.info("  Dirs removed:    %d", r["removed_dirs"])
+        logger.info("  Dirs preserved:  %d  (user-added files inside)", r["preserved_dirs"])
+        logger.info("  .strm deleted:   %d", r["deleted_strm"])
+        logger.info("  .nfo deleted:    %d", r["deleted_nfo"])
+        logger.info("  Errors:          %d", r["errors"])
         logger.info("=" * 60)
 
-        msg = (
-            f"Deleted {deleted_strm} .strm + {deleted_nfo} .nfo, "
-            f"removed {series_removed} series ({seasons_removed} season dirs)"
-        )
-        if preserved:
-            msg += f", preserved {preserved}"
-        return {
-            "status": "ok",
-            "message": msg,
-            "series_removed": series_removed,
-            "seasons_removed": seasons_removed,
-            "preserved_series": preserved,
-            "deleted_strm": deleted_strm,
-            "deleted_nfo": deleted_nfo,
-            "errors": errors,
-        }
+        msg = f"Deleted {r['deleted_strm']} .strm + {r['deleted_nfo']} .nfo, removed {r['removed_dirs']} folders"
+        if r["preserved_dirs"]:
+            msg += f", preserved {r['preserved_dirs']} (user files)"
+        return {"status": "ok", "message": msg, **r}
     
     def _clean_title(self, title: str) -> str:
         """Remove language prefixes like 'EN - ', 'FR - ' from titles.
