@@ -1,7 +1,9 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.9.4 — reject placeholder URL; downgrade localhost-reject to warning
+v1.10.0 — emit tmdbid/imdbid/uniqueid + rating + aired + runtime in NFOs;
+          prefer DB genre over M3U category — dramatic improvement to
+          media-server identification
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -19,7 +21,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.9.4"
+    version = "1.10.0"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
         "optional NFO metadata, batch processing, and a cron-driven auto-rescan."
@@ -1097,7 +1099,33 @@ class Plugin:
                 cleaned_genres.append(genre)
         
         return cleaned_genres or ["Unknown"]
-    
+
+    def _split_genres_clean(self, s: str) -> list:
+        """Split an already-clean genre string (e.g. from Series.genre / Movie.genre)
+        on /&, and trim whitespace.
+
+        Unlike _extract_genres, this preserves case — TMDB-grade values come
+        in as 'Sci-Fi & Fantasy' / 'Action & Adventure', and re-capitalising
+        would produce 'Sci-fi' which is wrong.
+        """
+        if not s:
+            return []
+        out = []
+        for part in re.split(r'[/&,]', s):
+            part = part.strip()
+            if part:
+                out.append(part)
+        return out
+
+    def _resolve_genres(self, db_genre: str, category_name: str) -> list:
+        """Prefer the DB genre (TMDB-grade) when populated; fall back to the
+        M3U category-derived genre. Both are filtered/cleaned by their own
+        helpers."""
+        db_clean = (db_genre or "").strip()
+        if db_clean:
+            return self._split_genres_clean(db_clean)
+        return self._extract_genres(category_name)
+
     def _generate_tvshow_nfo(self, series, category_name: str) -> str:
         """Generate tvshow.nfo XML content for a series."""
         raw_title = series.name or "Unknown"
@@ -1105,26 +1133,38 @@ class Plugin:
         title, title_year = self._strip_trailing_year(title)
         year = series.year or title_year or ""
         plot = series.description or ""
-        
-        # Extract genres from category
-        genres = self._extract_genres(category_name)
-        
-        # Build XML
+        rating = (getattr(series, "rating", "") or "").strip()
+        tmdb_id = (getattr(series, "tmdb_id", "") or "").strip()
+        imdb_id = (getattr(series, "imdb_id", "") or "").strip()
+
+        genres = self._resolve_genres(getattr(series, "genre", ""), category_name)
+
         xml_lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>']
         xml_lines.append('<tvshow>')
         xml_lines.append(f'    <title>{self._xml_escape(title)}</title>')
-        
+
         if year:
             xml_lines.append(f'    <year>{year}</year>')
-        
+
         for genre in genres:
             xml_lines.append(f'    <genre>{self._xml_escape(genre)}</genre>')
-        
+
         if plot:
             xml_lines.append(f'    <plot>{self._xml_escape(plot)}</plot>')
-        
+
+        if rating:
+            xml_lines.append(f'    <rating>{self._xml_escape(rating)}</rating>')
+
+        if tmdb_id:
+            xml_lines.append(f'    <tmdbid>{self._xml_escape(tmdb_id)}</tmdbid>')
+            xml_lines.append(f'    <uniqueid type="tmdb" default="true">{self._xml_escape(tmdb_id)}</uniqueid>')
+
+        if imdb_id:
+            xml_lines.append(f'    <imdbid>{self._xml_escape(imdb_id)}</imdbid>')
+            xml_lines.append(f'    <uniqueid type="imdb">{self._xml_escape(imdb_id)}</uniqueid>')
+
         xml_lines.append('</tvshow>')
-        
+
         return '\n'.join(xml_lines)
     
     def _generate_episode_nfo(self, episode) -> str:
@@ -1135,19 +1175,41 @@ class Plugin:
         season_num = episode.season_number or 0
         episode_num = episode.episode_number or 0
         plot = episode.description or ""
-        
-        # Build XML
+        rating = (getattr(episode, "rating", "") or "").strip()
+        tmdb_id = (getattr(episode, "tmdb_id", "") or "").strip()
+        imdb_id = (getattr(episode, "imdb_id", "") or "").strip()
+        air_date = getattr(episode, "air_date", None)
+        duration_secs = getattr(episode, "duration_secs", 0) or 0
+        runtime_min = duration_secs // 60 if duration_secs > 0 else 0
+
         xml_lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>']
         xml_lines.append('<episodedetails>')
         xml_lines.append(f'    <title>{self._xml_escape(title)}</title>')
         xml_lines.append(f'    <season>{season_num}</season>')
         xml_lines.append(f'    <episode>{episode_num}</episode>')
-        
+
         if plot:
             xml_lines.append(f'    <plot>{self._xml_escape(plot)}</plot>')
-        
+
+        if air_date:
+            xml_lines.append(f'    <aired>{air_date}</aired>')
+
+        if runtime_min:
+            xml_lines.append(f'    <runtime>{runtime_min}</runtime>')
+
+        if rating:
+            xml_lines.append(f'    <rating>{self._xml_escape(rating)}</rating>')
+
+        if tmdb_id:
+            xml_lines.append(f'    <tmdbid>{self._xml_escape(tmdb_id)}</tmdbid>')
+            xml_lines.append(f'    <uniqueid type="tmdb" default="true">{self._xml_escape(tmdb_id)}</uniqueid>')
+
+        if imdb_id:
+            xml_lines.append(f'    <imdbid>{self._xml_escape(imdb_id)}</imdbid>')
+            xml_lines.append(f'    <uniqueid type="imdb">{self._xml_escape(imdb_id)}</uniqueid>')
+
         xml_lines.append('</episodedetails>')
-        
+
         return '\n'.join(xml_lines)
     
     def _generate_nfo(self, movie, category_name: str) -> str:
@@ -1157,12 +1219,11 @@ class Plugin:
         title, title_year = self._strip_trailing_year(title)
         year = movie.year or title_year or ""
         plot = movie.description or ""
-        rating = movie.rating or ""
-        tmdb_id = movie.tmdb_id or ""
-        imdb_id = movie.imdb_id or ""
-        
-        # Extract genres from category
-        genres = self._extract_genres(category_name)
+        rating = (movie.rating or "").strip()
+        tmdb_id = (movie.tmdb_id or "").strip()
+        imdb_id = (movie.imdb_id or "").strip()
+
+        genres = self._resolve_genres(getattr(movie, "genre", ""), category_name)
         
         # Build XML
         xml_lines = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?>']
@@ -1179,14 +1240,16 @@ class Plugin:
             xml_lines.append(f'    <plot>{self._xml_escape(plot)}</plot>')
         
         if rating:
-            xml_lines.append(f'    <rating>{rating}</rating>')
-        
+            xml_lines.append(f'    <rating>{self._xml_escape(rating)}</rating>')
+
         if tmdb_id:
-            xml_lines.append(f'    <tmdbid>{tmdb_id}</tmdbid>')
-        
+            xml_lines.append(f'    <tmdbid>{self._xml_escape(tmdb_id)}</tmdbid>')
+            xml_lines.append(f'    <uniqueid type="tmdb" default="true">{self._xml_escape(tmdb_id)}</uniqueid>')
+
         if imdb_id:
-            xml_lines.append(f'    <imdbid>{imdb_id}</imdbid>')
-        
+            xml_lines.append(f'    <imdbid>{self._xml_escape(imdb_id)}</imdbid>')
+            xml_lines.append(f'    <uniqueid type="imdb">{self._xml_escape(imdb_id)}</uniqueid>')
+
         xml_lines.append('</movie>')
         
         return '\n'.join(xml_lines)

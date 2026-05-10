@@ -294,6 +294,168 @@ class TestValidateDispatcharrUrl:
         assert log.warnings == []
 
 
+# ---------- _split_genres_clean ----------
+
+class TestSplitGenresClean:
+    def test_empty(self, p):
+        assert p._split_genres_clean("") == []
+        assert p._split_genres_clean(None) == []
+
+    def test_preserves_case_for_tmdb_style(self, p):
+        # 'Sci-Fi' must NOT become 'Sci-fi' (which is what _extract_genres would do)
+        assert p._split_genres_clean("Sci-Fi & Fantasy") == ["Sci-Fi", "Fantasy"]
+
+    def test_splits_on_comma(self, p):
+        assert p._split_genres_clean("Crime, Drama") == ["Crime", "Drama"]
+
+    def test_splits_on_slash(self, p):
+        assert p._split_genres_clean("Action / Adventure") == ["Action", "Adventure"]
+
+    def test_single_genre(self, p):
+        assert p._split_genres_clean("Crime") == ["Crime"]
+
+
+# ---------- _resolve_genres ----------
+
+class TestResolveGenres:
+    def test_db_genre_preferred(self, p):
+        # When series.genre is populated (TMDB-grade), use it.
+        result = p._resolve_genres("Sci-Fi & Fantasy", "EN - Australian Tv (series)")
+        assert result == ["Sci-Fi", "Fantasy"]
+
+    def test_falls_back_to_category(self, p):
+        result = p._resolve_genres("", "EN - Action / Adventure (series)")
+        assert "Action" in result
+        assert "Adventure" in result
+
+    def test_falls_back_with_none(self, p):
+        result = p._resolve_genres(None, "Drama (series)")
+        assert "Drama" in result
+
+    def test_whitespace_db_genre_falls_back(self, p):
+        result = p._resolve_genres("   ", "Action (movie)")
+        assert "Action" in result
+
+
+# ---------- NFO generation: tmdbid / uniqueid / rating / aired / runtime ----------
+
+class _FakeSeries:
+    def __init__(self, **kw):
+        self.name = kw.get("name", "Tidelands")
+        self.year = kw.get("year", 2018)
+        self.description = kw.get("description", "")
+        self.tmdb_id = kw.get("tmdb_id", "")
+        self.imdb_id = kw.get("imdb_id", "")
+        self.rating = kw.get("rating", "")
+        self.genre = kw.get("genre", "")
+
+
+class _FakeEpisode:
+    def __init__(self, **kw):
+        self.name = kw.get("name", "Pilot")
+        self.season_number = kw.get("season_number", 1)
+        self.episode_number = kw.get("episode_number", 1)
+        self.description = kw.get("description", "")
+        self.tmdb_id = kw.get("tmdb_id", "")
+        self.imdb_id = kw.get("imdb_id", "")
+        self.rating = kw.get("rating", "")
+        self.air_date = kw.get("air_date", None)
+        self.duration_secs = kw.get("duration_secs", 0)
+
+
+class _FakeMovie:
+    def __init__(self, **kw):
+        self.name = kw.get("name", "Aladdin")
+        self.year = kw.get("year", 1992)
+        self.description = kw.get("description", "")
+        self.tmdb_id = kw.get("tmdb_id", "")
+        self.imdb_id = kw.get("imdb_id", "")
+        self.rating = kw.get("rating", "")
+        self.genre = kw.get("genre", "")
+
+
+class TestTvshowNfo:
+    def test_emits_tmdbid_and_uniqueid(self, p):
+        s = _FakeSeries(tmdb_id="83381")
+        out = p._generate_tvshow_nfo(s, "")
+        assert "<tmdbid>83381</tmdbid>" in out
+        assert '<uniqueid type="tmdb" default="true">83381</uniqueid>' in out
+
+    def test_no_tmdbid_when_unset(self, p):
+        s = _FakeSeries(tmdb_id="")
+        out = p._generate_tvshow_nfo(s, "")
+        assert "<tmdbid>" not in out
+        assert "<uniqueid" not in out
+
+    def test_emits_rating(self, p):
+        s = _FakeSeries(rating="7.0")
+        out = p._generate_tvshow_nfo(s, "")
+        assert "<rating>7.0</rating>" in out
+
+    def test_prefers_db_genre(self, p):
+        s = _FakeSeries(genre="Sci-Fi & Fantasy")
+        out = p._generate_tvshow_nfo(s, "EN - Australian Tv (series)")
+        assert "<genre>Sci-Fi</genre>" in out
+        assert "<genre>Fantasy</genre>" in out
+        assert "<genre>Australian Tv</genre>" not in out
+
+    def test_falls_back_to_category_genre(self, p):
+        s = _FakeSeries(genre="")
+        out = p._generate_tvshow_nfo(s, "Drama (series)")
+        assert "<genre>Drama</genre>" in out
+
+    def test_title_does_not_include_year(self, p):
+        s = _FakeSeries(name="Tidelands (2018)", year=2018)
+        out = p._generate_tvshow_nfo(s, "")
+        assert "<title>Tidelands</title>" in out
+        assert "<year>2018</year>" in out
+
+
+class TestEpisodeNfo:
+    def test_basic(self, p):
+        e = _FakeEpisode()
+        out = p._generate_episode_nfo(e)
+        assert "<season>1</season>" in out
+        assert "<episode>1</episode>" in out
+
+    def test_emits_aired(self, p):
+        import datetime
+        e = _FakeEpisode(air_date=datetime.date(2018, 12, 14))
+        out = p._generate_episode_nfo(e)
+        assert "<aired>2018-12-14</aired>" in out
+
+    def test_emits_runtime_minutes_from_seconds(self, p):
+        e = _FakeEpisode(duration_secs=2700)  # 45 min
+        out = p._generate_episode_nfo(e)
+        assert "<runtime>45</runtime>" in out
+
+    def test_zero_duration_omitted(self, p):
+        e = _FakeEpisode(duration_secs=0)
+        out = p._generate_episode_nfo(e)
+        assert "<runtime>" not in out
+
+    def test_emits_episode_tmdbid_when_set(self, p):
+        e = _FakeEpisode(tmdb_id="123")
+        out = p._generate_episode_nfo(e)
+        assert "<tmdbid>123</tmdbid>" in out
+
+
+class TestMovieNfoWithDbGenre:
+    def test_db_genre_preferred(self, p):
+        m = _FakeMovie(genre="Action & Adventure")
+        out = p._generate_nfo(m, "EN - Crap Category (movie)")
+        assert "<genre>Action</genre>" in out
+        assert "<genre>Adventure</genre>" in out
+
+    def test_uniqueid_added(self, p):
+        m = _FakeMovie(tmdb_id="11", imdb_id="tt0103639")
+        out = p._generate_nfo(m, "")
+        assert "<tmdbid>11</tmdbid>" in out
+        assert '<uniqueid type="tmdb" default="true">11</uniqueid>' in out
+        assert "<imdbid>tt0103639</imdbid>" in out
+        assert '<uniqueid type="imdb">tt0103639</uniqueid>' in out
+
+
 # ---------- _movie_target_paths ----------
 
 class TestMovieTargetPaths:
