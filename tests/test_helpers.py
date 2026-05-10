@@ -336,6 +336,65 @@ class TestResolveGenres:
         result = p._resolve_genres("   ", "Action (movie)")
         assert "Action" in result
 
+    def test_year_bucket_category_suppressed(self, p):
+        # Pure year-bucket category like "2026 Movies" yields no genre.
+        # The TMDB id in the NFO will let the media server fetch real genres.
+        assert p._resolve_genres("", "2026 Movies") == []
+        assert p._resolve_genres("", "2025 Movie") == []
+        assert p._resolve_genres("", "1990s Movies") == []
+        assert p._resolve_genres("", "2026 Series") == []
+        assert p._resolve_genres("", "2026 TV Shows") == []
+
+    def test_year_bucket_filter_preserves_real_genres(self, p):
+        # Real categorical genres pass through.
+        assert "Action" in p._resolve_genres("", "Action")
+        assert "Drama" in p._resolve_genres("", "Drama (movie)")
+
+    def test_mixed_year_bucket_and_real_genre(self, p):
+        # Slash-separated mix: keep the real genre, drop the bucket.
+        result = p._resolve_genres("", "Action / 2026 Movies")
+        assert "Action" in result
+        assert not any("Movies" in g for g in result)
+
+
+# ---------- _is_year_bucket_genre ----------
+
+class TestIsYearBucketGenre:
+    def test_matches_year_movies(self, p):
+        assert p._is_year_bucket_genre("2026 Movies") is True
+        assert p._is_year_bucket_genre("2025 Movie") is True
+        assert p._is_year_bucket_genre("1990s Movies") is True
+
+    def test_matches_year_series(self, p):
+        assert p._is_year_bucket_genre("2026 Series") is True
+
+    def test_matches_year_tv_shows(self, p):
+        assert p._is_year_bucket_genre("2026 TV Shows") is True
+        assert p._is_year_bucket_genre("2026 TVShows") is True
+
+    def test_case_insensitive(self, p):
+        assert p._is_year_bucket_genre("2026 movies") is True
+        assert p._is_year_bucket_genre("2026 MOVIES") is True
+
+    def test_real_genres_not_matched(self, p):
+        assert p._is_year_bucket_genre("Action") is False
+        assert p._is_year_bucket_genre("Sci-Fi") is False
+        assert p._is_year_bucket_genre("Drama") is False
+
+    def test_year_plus_genre_not_matched(self, p):
+        # "2026 Action Movies" has more than just year + Movies — keep it
+        assert p._is_year_bucket_genre("2026 Action Movies") is False
+
+    def test_movies_with_qualifier_not_matched(self, p):
+        # "Movies 2026" reverses order — keep it
+        assert p._is_year_bucket_genre("Movies 2026") is False
+
+    def test_empty_string(self, p):
+        assert p._is_year_bucket_genre("") is False
+
+    def test_none(self, p):
+        assert p._is_year_bucket_genre(None) is False
+
 
 # ---------- NFO generation: tmdbid / uniqueid / rating / aired / runtime ----------
 
@@ -454,6 +513,14 @@ class TestMovieNfoWithDbGenre:
         assert '<uniqueid type="tmdb" default="true">11</uniqueid>' in out
         assert "<imdbid>tt0103639</imdbid>" in out
         assert '<uniqueid type="imdb">tt0103639</uniqueid>' in out
+
+    def test_year_bucket_category_emits_no_genre(self, p):
+        # The whole point of v1.10.1: 'YYYY Movies' category produces no <genre>
+        m = _FakeMovie(genre="", tmdb_id="42")
+        out = p._generate_nfo(m, "2026 Movies")
+        assert "<genre>" not in out
+        # but the tmdbid is still there so media servers can fetch genre via TMDB
+        assert "<tmdbid>42</tmdbid>" in out
 
 
 # ---------- _movie_target_paths ----------

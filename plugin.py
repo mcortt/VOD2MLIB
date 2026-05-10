@@ -1,9 +1,9 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.10.0 — emit tmdbid/imdbid/uniqueid + rating + aired + runtime in NFOs;
-          prefer DB genre over M3U category — dramatic improvement to
-          media-server identification
+v1.10.1 — suppress year-bucket category names ('2026 Movies') as fake
+          genres; let media servers fetch real genre via the tmdbid we
+          already emit
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -21,7 +21,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.10.0"
+    version = "1.10.1"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
         "optional NFO metadata, batch processing, and a cron-driven auto-rescan."
@@ -48,6 +48,15 @@ class Plugin:
     # Title cleaning. Whitespace required before the dash so 'AC-130' is preserved.
     _LANGUAGE_PREFIX_RE = re.compile(r'^[A-Z]{2,3}\s+-\s*')
     _TRAILING_YEAR_RE = re.compile(r'\s*\((\d{4})\)\s*$')
+
+    # Year-bucket category names like "2026 Movies", "1990s Series",
+    # "2020 TV Shows" — these are navigation buckets from the IPTV provider's
+    # category list, not real genres. Suppressed when the genre would
+    # otherwise be one of these.
+    _YEAR_BUCKET_GENRE_RE = re.compile(
+        r'^\d{2,4}s?\s+(movies?|series|tv\s*shows?)$',
+        re.IGNORECASE,
+    )
 
     fields = [
         {
@@ -1117,14 +1126,30 @@ class Plugin:
                 out.append(part)
         return out
 
+    def _is_year_bucket_genre(self, g: str) -> bool:
+        """Return True if g looks like a year-bucket category name
+        ('2026 Movies', '1990s Series') rather than a real genre.
+
+        Used by _resolve_genres to suppress useless category-derived genres
+        when Movie.genre / Series.genre is empty. Real categorical genres
+        like 'Action', 'Drama, Crime' are unaffected.
+        """
+        return bool(self._YEAR_BUCKET_GENRE_RE.match((g or "").strip()))
+
     def _resolve_genres(self, db_genre: str, category_name: str) -> list:
         """Prefer the DB genre (TMDB-grade) when populated; fall back to the
-        M3U category-derived genre. Both are filtered/cleaned by their own
-        helpers."""
+        M3U category-derived genre, with year-bucket noise filtered out.
+
+        If the only category-derived genre would be a year-bucket like
+        '2026 Movies', return an empty list — better to emit no <genre> tag
+        than a misleading one. The TMDB id in the NFO lets media servers
+        fetch a real genre from TMDB themselves.
+        """
         db_clean = (db_genre or "").strip()
         if db_clean:
             return self._split_genres_clean(db_clean)
-        return self._extract_genres(category_name)
+        candidates = self._extract_genres(category_name)
+        return [g for g in candidates if not self._is_year_bucket_genre(g)]
 
     def _generate_tvshow_nfo(self, series, category_name: str) -> str:
         """Generate tvshow.nfo XML content for a series."""
