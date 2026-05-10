@@ -32,7 +32,7 @@
          - /opt/dispatcharr-vods:/VODS
    ```
 
-2. **Zip the plugin files** (`plugin.py`, `plugin.json`, `__init__.py`, `logo.png`, `LICENSE`, `README.md`).
+2. **Zip the plugin files** (`plugin.py`, `plugin.json`, `__init__.py`, `logo.png`, `LICENSE`, `README.md`, `requirements.txt`). Or grab the prebuilt zip from a [GitHub release](https://github.com/R3XCHRIS/VOD2MLIB/releases).
 
 3. **Dispatcharr → Plugins → Import** → upload the zip → enable the plugin.
 
@@ -116,9 +116,11 @@ The Settings tab is grouped into four sections:
 |  | Dispatcharr URL | Externally-reachable URL of Dispatcharr (NOT `localhost`). Baked into every `.strm`. |
 | **Movies** | Batch Size | How many movies to process per click |
 |  | Generate Movie NFO Files | Toggle Kodi/Jellyfin metadata generation |
+|  | Nest Movies by Category | Wrap each movie folder inside a subfolder named by its M3U category (off by default; movies without a category go to `Unassigned/`) |
 | **Series** | Batch Size (Series) | How many series to process per click |
 |  | Generate Series NFO Files | Toggle `tvshow.nfo` and per-episode `.nfo` |
 |  | Refresh Existing Series | Re-evaluate already-processed series for new episodes (cron-friendly) |
+|  | Nest Series by Category | Wrap each series folder inside a subfolder named by its M3U category (off by default; series without a category go to `Unassigned/`) |
 | **Auto-rescan schedule** | Schedule (cron) | Standard 5-field expression. Default `0 3 * * *` (daily 03:00) |
 |  | Scheduled Action | What the cron fires (full rescan recommended) |
 
