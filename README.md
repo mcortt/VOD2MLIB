@@ -7,7 +7,7 @@
 <p align="center">A Dispatcharr plugin that turns your VOD catalogue into a folder of <code>.strm</code> files (with optional NFO metadata) that media servers — Jellyfin, Emby, Kodi, ChannelsDVR — can index and play.</p>
 
 <p align="center">
-  <i>v1.11.0 — slug <code>vod2mlib</code></i>
+  <i>v1.12.0 — slug <code>vod2mlib</code></i>
 </p>
 
 > **Plex users:** Plex does *not* play `.strm` files. Jellyfin and ChannelsDVR do. See [Plex compatibility](#plex-compatibility) below.
@@ -122,6 +122,7 @@ The Settings tab is grouped into four sections:
 |  | Refresh Existing Series | Re-evaluate already-processed series for new episodes (cron-friendly) |
 |  | Nest Series by Category | Wrap each series folder inside a subfolder named by its M3U category (off by default; series without a category go to `Unassigned/`) |
 | **Auto-rescan schedule** | Schedule (cron) | Standard 5-field expression. Default `0 3 * * *` (daily 03:00) |
+|  | Schedule Timezone | IANA timezone the cron is interpreted in (e.g. `Europe/London`). Empty = UTC. Handles DST automatically. |
 |  | Scheduled Action | What the cron fires (full rescan recommended) |
 
 ## Workflow
@@ -195,6 +196,8 @@ The bundled logo is reproducible — replace `tools/source_logo.png` and run `py
 - Settings are snapshotted into the PeriodicTask's `kwargs` at Apply-time so the cron runs with deterministic config. Re-click Apply to refresh.
 
 ## Changelog
+
+**v1.12.0** — New `Schedule Timezone` setting (IANA name like `Europe/London`, `America/New_York`; default empty = UTC). The cron expression is now interpreted in that timezone, so `0 3 * * *` in `Europe/London` fires at 03:00 local time year-round — DST handled automatically. `[SCHEDULE] Show status` now reports the timezone alongside the cron. New `help_url` manifest field pointing at the README — Dispatcharr's plugin tile renders this as a link next to the author name, so users can find the docs without leaving the UI. Validator (`_validate_timezone`) rejects invalid IANA names at Apply time with a helpful error pointing at the timezone list. 7 new unit tests (113 total).
 
 **v1.11.0** — Optional category-nested folder layout. Two new boolean settings (both default OFF): `Nest Movies by Category` and `Nest Series by Category`. When ON, each item's folder is wrapped in a subfolder named by its raw M3U category — useful when your provider organises content by genre. Items without a category land under `Unassigned/`. Items present under multiple categories (e.g. 4K vs HD) get separate folders intentionally. Cleanup actions refactored to walk recursively (`os.walk`) so they handle both flat and nested layouts in one pass — empty Season / series / category folders are removed bottom-up, user-added files (subtitles, posters, extras) are still preserved. **Layout-change warning:** flipping a `Nest by Category` setting after generation does NOT migrate existing folders — the new layout coexists alongside the old. Run `[⚠ DANGER] Clean up Movies` / `Series` followed by `[GENERATE]` to fully switch layouts. 17 new unit tests (106 total).
 

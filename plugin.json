@@ -1,11 +1,12 @@
 {
   "name": "VOD to Media Library",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "VOD → media library bridge. Generates .strm + NFO files from Dispatcharr's VOD catalogue, with optional cron-driven auto-rescan that picks up newly-added episodes.",
   "author": "R3XCHRIS",
   "license": "MIT",
   "min_dispatcharr_version": "v0.24.0",
   "repo_url": "https://github.com/R3XCHRIS/VOD2MLIB",
+  "help_url": "https://github.com/R3XCHRIS/VOD2MLIB#readme",
   "fields": [
     {
       "id": "_about",
@@ -130,6 +131,14 @@
       "type": "string",
       "default": "0 3 * * *",
       "help_text": "Standard 5-field cron: 'minute hour day-of-month month day-of-week'. Default '0 3 * * *' = every day at 03:00. Used by Apply Schedule."
+    },
+    {
+      "id": "schedule_timezone",
+      "label": "Schedule Timezone",
+      "type": "string",
+      "default": "",
+      "placeholder": "Europe/London",
+      "help_text": "IANA timezone name the cron expression is interpreted in (e.g. 'Europe/London', 'America/New_York', 'Australia/Sydney'). Leave empty to use UTC. Affects when the cron fires — '0 3 * * *' in 'Europe/London' means 03:00 London time year-round (handling BST automatically), not 03:00 UTC."
     },
     {
       "id": "schedule_target",

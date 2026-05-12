@@ -1,8 +1,8 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.11.0 — optional category-nested folder layout (Movies & Series);
-          cleanup refactored to walk recursively for both layouts
+v1.12.0 — schedule timezone setting (so '0 3 * * *' fires at local
+          time, not UTC); help_url for docs link on the plugin tile
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -20,7 +20,8 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.11.0"
+    version = "1.12.0"
+    help_url = "https://github.com/R3XCHRIS/VOD2MLIB#readme"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
         "optional NFO metadata, batch processing, and a cron-driven auto-rescan."
@@ -180,6 +181,14 @@ class Plugin:
             "type": "string",
             "default": "0 3 * * *",
             "help_text": "Standard 5-field cron: 'minute hour day-of-month month day-of-week'. Default '0 3 * * *' = every day at 03:00. Used by 'Apply Schedule'."
+        },
+        {
+            "id": "schedule_timezone",
+            "label": "Schedule Timezone",
+            "type": "string",
+            "default": "",
+            "placeholder": "Europe/London",
+            "help_text": "IANA timezone name the cron expression is interpreted in (e.g. 'Europe/London', 'America/New_York', 'Australia/Sydney'). Leave empty to use UTC. Affects when the cron fires — '0 3 * * *' in 'Europe/London' means 03:00 London time year-round (handling BST automatically), not 03:00 UTC."
         },
         {
             "id": "schedule_target",
@@ -1393,6 +1402,29 @@ class Plugin:
             "series": series,
         }
 
+    def _validate_timezone(self, tz_str: str):
+        """Validate an IANA timezone name.
+
+        Returns (ok, error_message). Empty string is treated as 'use UTC'
+        and is considered valid.
+        """
+        clean = (tz_str or "").strip()
+        if not clean:
+            return True, None
+        try:
+            from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+        except ImportError:
+            return True, None  # pre-3.9 Python — trust the user
+        try:
+            ZoneInfo(clean)
+            return True, None
+        except (ZoneInfoNotFoundError, ValueError):
+            return False, (
+                f"Invalid timezone {clean!r}. Use an IANA name like "
+                "'Europe/London', 'America/New_York', or 'UTC'. "
+                "See https://en.wikipedia.org/wiki/List_of_tz_database_time_zones"
+            )
+
     def _parse_cron(self, cron_expr: str):
         """Validate and split a 5-field cron expression. Returns tuple or raises ValueError."""
         if not cron_expr:
@@ -1419,6 +1451,7 @@ class Plugin:
         """Register or update a periodic auto-rescan task via django-celery-beat."""
         cron_expr = settings.get("schedule_cron") or "0 3 * * *"
         target = settings.get("schedule_target") or "rescan_all"
+        tz_str = (settings.get("schedule_timezone") or "").strip() or "UTC"
 
         valid_targets = self._valid_schedule_targets()
         if target not in valid_targets:
@@ -1429,6 +1462,11 @@ class Plugin:
         except ValueError as e:
             logger.error("Invalid cron expression: %s", e)
             return {"status": "error", "message": str(e)}
+
+        ok_tz, tz_err = self._validate_timezone(tz_str)
+        if not ok_tz:
+            logger.error(tz_err)
+            return {"status": "error", "message": tz_err}
 
         try:
             from django_celery_beat.models import PeriodicTask, CrontabSchedule
@@ -1449,6 +1487,7 @@ class Plugin:
             day_of_month=dom,
             month_of_year=month,
             day_of_week=dow,
+            timezone=tz_str,
         )
 
         snapshot = {k: v for k, v in (settings or {}).items() if not k.startswith("schedule_")}
@@ -1465,7 +1504,7 @@ class Plugin:
         )
 
         verb = "Created" if created else "Updated"
-        logger.info("%s schedule: %s @ '%s' → action '%s'", verb, self.SCHEDULE_TASK_NAME, cron_expr, target)
+        logger.info("%s schedule: %s @ '%s' (%s) → action '%s'", verb, self.SCHEDULE_TASK_NAME, cron_expr, tz_str, target)
         logger.info("Settings snapshot keys: %s", sorted(snapshot.keys()))
         logger.info("")
         logger.info("Note: re-run 'Apply Schedule' after changing settings to refresh the snapshot.")
@@ -1482,9 +1521,10 @@ class Plugin:
 
         return {
             "status": "ok",
-            "message": f"{verb} periodic task '{self.SCHEDULE_TASK_NAME}' for cron '{cron_expr}' → {target}.{warning}",
+            "message": f"{verb} periodic task for cron '{cron_expr}' ({tz_str}) → {target}.{warning}",
             "created": created,
             "cron": cron_expr,
+            "timezone": tz_str,
             "target": target,
             "refresh_existing_in_snapshot": refresh_on,
         }
@@ -1519,23 +1559,26 @@ class Plugin:
             return {"status": "ok", "message": msg, "scheduled": False}
 
         cron = task.crontab
-        cron_str = (
-            f"{cron.minute} {cron.hour} {cron.day_of_month} {cron.month_of_year} {cron.day_of_week}"
-            if cron else "<none>"
-        )
+        if cron:
+            cron_str = f"{cron.minute} {cron.hour} {cron.day_of_month} {cron.month_of_year} {cron.day_of_week}"
+            tz_str = str(cron.timezone) if cron.timezone else "UTC"
+        else:
+            cron_str = "<none>"
+            tz_str = "<none>"
         last_run = str(task.last_run_at) if task.last_run_at else "never"
         state = "enabled" if task.enabled else "disabled"
 
         logger.info("Schedule: %s", task.name)
         logger.info("  Enabled:    %s", task.enabled)
         logger.info("  Cron:       %s", cron_str)
+        logger.info("  Timezone:   %s", tz_str)
         logger.info("  Task:       %s", task.task)
         logger.info("  Kwargs:     %s", task.kwargs)
         logger.info("  Last run:   %s", last_run)
         logger.info("  Total runs: %s", task.total_run_count)
 
         message = (
-            f"Schedule {state} — cron '{cron_str}', "
+            f"Schedule {state} — cron '{cron_str}' ({tz_str}), "
             f"last run {last_run}, total runs {task.total_run_count}"
         )
         return {
@@ -1544,6 +1587,7 @@ class Plugin:
             "scheduled": True,
             "enabled": task.enabled,
             "cron": cron_str,
+            "timezone": tz_str,
             "task": task.task,
             "last_run_at": str(task.last_run_at) if task.last_run_at else None,
             "total_run_count": task.total_run_count,

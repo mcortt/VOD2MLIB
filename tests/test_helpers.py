@@ -294,6 +294,41 @@ class TestValidateDispatcharrUrl:
         assert log.warnings == []
 
 
+# ---------- _validate_timezone ----------
+
+class TestValidateTimezone:
+    def test_empty_string_ok(self, p):
+        ok, err = p._validate_timezone("")
+        assert ok is True
+        assert err is None
+
+    def test_none_ok(self, p):
+        ok, err = p._validate_timezone(None)
+        assert ok is True
+
+    def test_whitespace_only_ok(self, p):
+        ok, err = p._validate_timezone("   ")
+        assert ok is True
+
+    def test_utc(self, p):
+        ok, err = p._validate_timezone("UTC")
+        assert ok is True
+
+    def test_iana_zones(self, p):
+        for tz in ("Europe/London", "America/New_York", "Australia/Sydney", "Asia/Tokyo"):
+            ok, err = p._validate_timezone(tz)
+            assert ok is True, f"expected {tz!r} to be valid"
+
+    def test_invalid_zone_rejected(self, p):
+        ok, err = p._validate_timezone("Not/A/Real/Zone")
+        assert ok is False
+        assert "Invalid timezone" in err
+
+    def test_garbage_rejected(self, p):
+        ok, err = p._validate_timezone("definitely-not-a-zone")
+        assert ok is False
+
+
 # ---------- _split_genres_clean ----------
 
 class TestSplitGenresClean:
