@@ -10,6 +10,20 @@
   <i>v1.12.0 — slug <code>vod2mlib</code></i>
 </p>
 
+> [!WARNING]
+> ## ⚠ Scheduled rescans can silently miss ticks after a Dispatcharr restart
+>
+> If you've registered the auto-rescan via `[SCHEDULE] Apply / Update`, the cron tick **can silently fail to fire** after any Dispatcharr container restart (including Watchtower image updates). Symptom: you set up the schedule, the next morning `[SCHEDULE] Show status` reports `last run: never` (or a stale timestamp), no log entry for the missed run. The cause is upstream — Dispatcharr's Celery workers don't autodiscover plugin `@shared_task` registrations on startup, because plugins live outside `INSTALLED_APPS`. Beat fires the task; the worker doesn't recognise it; the tick is dropped silently.
+>
+> Tracked at [Dispatcharr/Dispatcharr#1244](https://github.com/Dispatcharr/Dispatcharr/issues/1244); one-line fix open as [Dispatcharr/Dispatcharr#1245](https://github.com/Dispatcharr/Dispatcharr/pull/1245). Once the fix lands in a tagged Dispatcharr release, this warning will be removed and `min_dispatcharr_version` in `plugin.json` will be bumped to that release.
+>
+> **Workaround (works today)** — after every container restart, do *one* of these so the Celery worker imports `plugin.py` and registers the `vod2mlib.scheduled_rescan` task:
+>
+> - Open the Dispatcharr **Plugins** tab once (triggers the plugin loader to import plugin modules)
+> - Or click `[SCHEDULE] Test fire now` once (verifies the pipeline AND warms up the task registration in one action)
+>
+> Manual generate / scan / cleanup actions are unaffected — they don't run via Celery beat.
+
 > **Plex users:** Plex does *not* play `.strm` files. Jellyfin and ChannelsDVR do. See [Plex compatibility](#plex-compatibility) below.
 
 ## Credits
