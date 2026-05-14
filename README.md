@@ -7,22 +7,19 @@
 <p align="center">A Dispatcharr plugin that turns your VOD catalogue into a folder of <code>.strm</code> files (with optional NFO metadata) that media servers — Jellyfin, Emby, Kodi, ChannelsDVR — can index and play.</p>
 
 <p align="center">
-  <i>v1.14.1 — slug <code>vod2mlib</code></i>
+  <i>v1.14.2 — slug <code>vod2mlib</code></i>
 </p>
 
 > [!WARNING]
-> ## ⚠ Scheduled rescans can silently miss ticks after a Dispatcharr restart
+> ## ⚠ Scheduled rescans rely on the `dvr` Celery queue
 >
-> If you've registered the auto-rescan via `[SCHEDULE] Apply / Update`, the cron tick **can silently fail to fire** after any Dispatcharr container restart (including Watchtower image updates). Symptom: you set up the schedule, the next morning `[SCHEDULE] Show status` reports `last run: never` (or a stale timestamp), no log entry for the missed run. The cause is upstream — Dispatcharr's Celery workers don't autodiscover plugin `@shared_task` registrations on startup, because plugins live outside `INSTALLED_APPS`. Beat fires the task; the worker doesn't recognise it; the tick is dropped silently.
+> Dispatcharr's default Celery worker doesn't register plugin `@shared_task` decorators reliably — plugins live outside `INSTALLED_APPS`, so neither autodiscovery nor the upstream hotfix succeeds in that worker process. As of v1.14.2, this plugin routes its scheduled task (and `[SCHEDULE] Test fire now`) to the `dvr` queue instead, because Dispatcharr's `dvr` worker DOES end up with plugin tasks registered. The default DVR worker uses a thread pool with concurrency 20, so co-tenanting a nightly rescan there has no practical impact on DVR recording capacity.
 >
-> Tracked at [Dispatcharr/Dispatcharr#1244](https://github.com/Dispatcharr/Dispatcharr/issues/1244); one-line fix open as [Dispatcharr/Dispatcharr#1245](https://github.com/Dispatcharr/Dispatcharr/pull/1245). Once the fix lands in a tagged Dispatcharr release, this warning will be removed and `min_dispatcharr_version` in `plugin.json` will be bumped to that release.
+> Tracked upstream at [Dispatcharr/Dispatcharr#1244](https://github.com/Dispatcharr/Dispatcharr/issues/1244); fix open as [Dispatcharr/Dispatcharr#1245](https://github.com/Dispatcharr/Dispatcharr/pull/1245). Once the default worker properly registers plugin tasks in a tagged Dispatcharr release, this routing can be removed and `min_dispatcharr_version` in `plugin.json` will be bumped.
 >
-> **Workaround (works today)** — after every container restart, do *one* of these so the Celery worker imports `plugin.py` and registers the `vod2mlib.scheduled_rescan` task:
+> **If you set up your schedule on v1.14.1 or earlier**, click `[SCHEDULE] Apply / Update` once after upgrading — that rewrites the stored task to route via the `dvr` queue. Without that re-apply, beat will keep dispatching to the default queue (where the worker rejects the task with `unregistered task`) and `[SCHEDULE] Show status` will misleadingly report `total_run_count` increasing because that field is incremented on dispatch, not on successful execution.
 >
-> - Open the Dispatcharr **Plugins** tab once (triggers the plugin loader to import plugin modules)
-> - Or click `[SCHEDULE] Test fire now` once (verifies the pipeline AND warms up the task registration in one action)
->
-> Manual generate / scan / cleanup actions are unaffected — they don't run via Celery beat.
+> Manual generate / scan / cleanup actions are unaffected — they run synchronously in the uwsgi process and don't depend on Celery worker registration.
 
 > **Plex users:** Plex does *not* play `.strm` files. Jellyfin and ChannelsDVR do. See [Plex compatibility](#plex-compatibility) below.
 

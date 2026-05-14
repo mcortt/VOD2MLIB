@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.14.2 — fix silently-failing scheduled rescans (route to `dvr` queue)
+
+Scheduled rescans have been silently failing since at least v1.4 — beat fires the task at 03:00, the default celery worker receives it, looks up `vod2mlib.scheduled_rescan` in its registry, doesn't find it (plugins live outside `INSTALLED_APPS`, the upstream hotfix in `dispatcharr/celery.py` crashes with `AppRegistryNotReady` at module-import time, and `apps.plugins.AppConfig.ready()` short-circuits via `should_skip_initialization()` when `'celery'` is in argv), and raises `KeyError: 'vod2mlib.scheduled_rescan'`. The `total_run_count` on the periodic task still increments because that field counts beat dispatches, not successful worker executions — so the failure looks invisible from `[SCHEDULE] Show status`.
+
+Empirically, Dispatcharr's `dvr` celery worker DOES end up with plugin tasks registered (verified via `celery inspect registered`). v1.14.2 routes the scheduled task and `[SCHEDULE] Test fire now` to the `dvr` queue so the worker that actually has the task registered picks it up. The `dvr` worker is configured with a 20-thread pool, so this has no practical impact on DVR recording capacity.
+
+**If you set up your schedule on v1.14.1 or earlier**, click `[SCHEDULE] Apply / Update` once after upgrading. That rewrites the stored PeriodicTask to set `queue='dvr'`. Without that re-click, the existing record keeps routing to the default queue (where the failure happens).
+
+This is a workaround for an upstream Dispatcharr bug ([#1244](https://github.com/Dispatcharr/Dispatcharr/issues/1244) / [#1245](https://github.com/Dispatcharr/Dispatcharr/pull/1245)). Once Dispatcharr properly registers plugin tasks in the default worker, the `queue='dvr'` routing can be removed.
+
 ## v1.14.1 — Test fire is async; shorter Movies action description
 
 Two small fixes:

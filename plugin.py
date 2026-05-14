@@ -1,8 +1,10 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.14.1 — fix Test fire 504 (now enqueues via Celery instead of
-          running synchronously); shorter Movies action description
+v1.14.2 — route scheduled task + test fire to the 'dvr' celery queue
+          so the worker that actually has the task registered picks it
+          up. Fixes silently-failing nightly cron and 'unregistered
+          task' errors on test fire.
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -20,7 +22,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.14.1"
+    version = "1.14.2"
     help_url = "https://github.com/R3XCHRIS/VOD2MLIB#readme"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
@@ -1562,6 +1564,7 @@ class Plugin:
             defaults={
                 "crontab": schedule,
                 "task": self.SCHEDULED_TASK_CELERY_NAME,
+                "queue": "dvr",
                 "kwargs": json.dumps({"action": target, "settings": snapshot}),
                 "enabled": True,
                 "description": f"Auto-rescan for {self.name} v{self.version}",
@@ -1692,6 +1695,7 @@ class Plugin:
             async_result = current_app.send_task(
                 self.SCHEDULED_TASK_CELERY_NAME,
                 kwargs={"action": action, "settings": snapshot_settings},
+                queue="dvr",
             )
         except Exception as e:
             logger.error("Failed to enqueue test fire: %s", e)
