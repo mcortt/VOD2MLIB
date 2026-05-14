@@ -1,8 +1,8 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.14.0 — remove Refresh Existing Movies setting; URL refresh for
-          movies is now an internal flag triggered only by Full rescan
+v1.14.1 — fix Test fire 504 (now enqueues via Celery instead of
+          running synchronously); shorter Movies action description
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -20,7 +20,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.14.0"
+    version = "1.14.1"
     help_url = "https://github.com/R3XCHRIS/VOD2MLIB#readme"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
@@ -217,7 +217,7 @@ class Plugin:
         {
             "id": "generate_movies",
             "label": "[GENERATE] Movies",
-            "description": "Process movies per Batch Size. Existing .strm files are skipped — use Full rescan to refresh URLs in existing files.",
+            "description": "Process movies per Batch Size. Existing .strm files are skipped.",
             "button_label": "Generate",
             "button_variant": "filled",
             "button_color": "green",
@@ -1659,11 +1659,12 @@ class Plugin:
         }
 
     def _schedule_test_fire(self, settings: Dict[str, Any], logger):
-        """Synchronously run the action+settings stored in the registered schedule.
+        """Enqueue the registered schedule's task on Celery, returning immediately.
 
-        Verifies the cron pipeline end-to-end without waiting for the next tick.
-        Reads the PeriodicTask kwargs (NOT the live settings) so this is a true
-        replay of what the scheduler will fire.
+        Mirrors what django-celery-beat does on a cron tick: send the task to
+        the worker pool and let it run there. The HTTP request returns at once
+        so nginx doesn't time out for long rescans. Verify completion via
+        [SCHEDULE] Show status (last_run_at updates when the worker finishes).
         """
         try:
             from django_celery_beat.models import PeriodicTask
@@ -1686,14 +1687,22 @@ class Plugin:
         if action not in self._valid_schedule_targets():
             return {"status": "error", "message": f"Stored action '{action}' is not a valid target."}
 
-        logger.info("Test-firing schedule: action=%s with %d snapshotted settings", action, len(snapshot_settings))
-        result = self.run(action, {}, {"logger": logger, "settings": snapshot_settings})
-        msg = (result or {}).get("message", "(no message)")
+        try:
+            from celery import current_app
+            async_result = current_app.send_task(
+                self.SCHEDULED_TASK_CELERY_NAME,
+                kwargs={"action": action, "settings": snapshot_settings},
+            )
+        except Exception as e:
+            logger.error("Failed to enqueue test fire: %s", e)
+            return {"status": "error", "message": f"Failed to enqueue task on Celery: {e}"}
+
+        logger.info("Test fire enqueued: action=%s task_id=%s", action, async_result.id)
         return {
             "status": "ok",
-            "message": f"Test fire complete ({action}): {msg}",
+            "message": f"Test fire enqueued ({action}); task id {async_result.id}. Verify via [SCHEDULE] Show status — last_run_at updates when the worker finishes.",
             "fired_action": action,
-            "result": result,
+            "task_id": async_result.id,
         }
 
 

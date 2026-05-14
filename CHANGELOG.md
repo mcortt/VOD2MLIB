@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.14.1 — Test fire is async; shorter Movies action description
+
+Two small fixes:
+
+- **`[SCHEDULE] Test fire now` no longer times out.** Previously the handler ran the scheduled action synchronously inside the HTTP request, which now (since the v1.13.0 URL-refresh work made `rescan_all` heavier) routinely exceeded nginx's 60s proxy timeout — users saw a `504 Gateway Time-out` toast. The new implementation enqueues the same Celery task that beat dispatches on a cron tick, returning the task id immediately. Verify completion via `[SCHEDULE] Show status` (the `last_run_at` field updates when the worker finishes).
+- **`[GENERATE] Movies` action description shortened** back to the v1.12.0 wording. The v1.14.0 description ran over two lines in the UI, which trips Dispatcharr's flex-wrap behaviour and pushes the Run button below the title. The "use Full rescan to refresh URLs" tip now lives only in the README/CHANGELOG.
+
 ## v1.14.0 — drop the `Refresh Existing Movies` setting
 
 Removes the user-visible `Refresh Existing Movies` toggle added in v1.13.0. The URL-refresh capability for movies stays — but it's now only triggered by `[GENERATE] Full rescan` (and the cron schedule's `rescan_all` target), via an internal kwarg on `_generate_movies` rather than a saved setting. The toggle was almost always redundant: anyone who wanted to refresh URLs would run Full rescan anyway, and that path already forces the refresh internally.

@@ -1,6 +1,6 @@
 {
   "name": "VOD to Media Library",
-  "version": "1.14.0",
+  "version": "1.14.1",
   "description": "VOD → media library bridge. Generates .strm + NFO files from Dispatcharr's VOD catalogue, with optional cron-driven auto-rescan that picks up newly-added episodes.",
   "author": "R3XCHRIS",
   "license": "MIT",
@@ -166,7 +166,7 @@
     {
       "id": "generate_movies",
       "label": "[GENERATE] Movies",
-      "description": "Process movies per Batch Size. Existing .strm files are skipped — use Full rescan to refresh URLs in existing files.",
+      "description": "Process movies per Batch Size. Existing .strm files are skipped.",
       "button_label": "Generate",
       "button_variant": "filled",
       "button_color": "green"
