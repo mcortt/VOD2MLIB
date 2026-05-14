@@ -7,7 +7,7 @@
 <p align="center">A Dispatcharr plugin that turns your VOD catalogue into a folder of <code>.strm</code> files (with optional NFO metadata) that media servers — Jellyfin, Emby, Kodi, ChannelsDVR — can index and play.</p>
 
 <p align="center">
-  <i>v1.13.0 — slug <code>vod2mlib</code></i>
+  <i>v1.14.0 — slug <code>vod2mlib</code></i>
 </p>
 
 > [!WARNING]
@@ -130,7 +130,6 @@ The Settings tab is grouped into four sections:
 |  | Dispatcharr URL | Externally-reachable URL of Dispatcharr (NOT `localhost`). Baked into every `.strm`. |
 | **Movies** | Batch Size | How many movies to process per click |
 |  | Generate Movie NFO Files | Toggle Kodi/Jellyfin metadata generation |
-|  | Refresh Existing Movies | Rewrite existing movie `.strm` files with the current Dispatcharr URL — turn ON after changing the URL setting. Preserves `.nfo` edits. Off by default. |
 |  | Nest Movies by Category | Wrap each movie folder inside a subfolder named by its M3U category (off by default; movies without a category go to `Unassigned/`) |
 | **Series** | Batch Size (Series) | How many series to process per click |
 |  | Generate Series NFO Files | Toggle `tvshow.nfo` and per-episode `.nfo` |
@@ -144,7 +143,7 @@ The Settings tab is grouped into four sections:
 
 **First run.** Configure paths → click `[LIBRARY] Catalogue snapshot` to verify the plugin can see your VODs → click `[GENERATE] Movies` with Batch Size 10 → spot-check the output → scale up.
 
-**Scaling up.** Increase Batch Size, click again. Existing files are skipped by default, so each click only processes new ones. (Turn ON `Refresh Existing Movies` / `Refresh Existing Series` if you instead want to rewrite existing `.strm` URLs after changing the Dispatcharr URL setting.)
+**Scaling up.** Increase Batch Size, click again. Existing files are skipped, so each click only processes new ones. (If you need to refresh URLs in already-generated files — typically after changing the `Dispatcharr URL` setting — use `[GENERATE] Full rescan` instead; it rewrites all existing `.strm` while preserving your `.nfo` edits.)
 
 **Auto-rescan.**
 1. Turn ON **Refresh Existing Series**.
@@ -181,7 +180,7 @@ Workable alternatives:
 
 **Media server can't see the generated files at all.** The host path isn't shared with the media server's process. See [Sharing the VODs folder](#sharing-the-vods-folder-with-media-servers).
 
-**Media server sees the files but playback fails immediately.** Open one of the `.strm` files in a text editor — it contains a single URL. Try fetching that URL from the machine running your media server (`curl -I <url>`). If that fails, the `Dispatcharr URL` setting isn't reachable from there. Fix the URL, then turn ON `Refresh Existing Movies` and `Refresh Existing Series` and run `[GENERATE] Full rescan` — the existing `.strm` files will be rewritten with the new URL, and your `.nfo` edits are preserved. (Pre-v1.13.0 you had to `[⚠ DANGER] Clean up` then regenerate, which also wiped any user `.nfo` edits.)
+**Media server sees the files but playback fails immediately.** Open one of the `.strm` files in a text editor — it contains a single URL. Try fetching that URL from the machine running your media server (`curl -I <url>`). If that fails, the `Dispatcharr URL` setting isn't reachable from there. Fix the URL, then run `[GENERATE] Full rescan` — every existing `.strm` is rewritten with the new URL, and your `.nfo` edits are preserved. (Pre-v1.13.0 you had to `[⚠ DANGER] Clean up` then regenerate, which also wiped any user `.nfo` edits.)
 
 **"All profiles at capacity" error when playing on TiviMate / Android.** Not a `.strm` issue — this is a known Dispatcharr connection-counting bug ([Dispatcharr #451](https://github.com/Dispatcharr/Dispatcharr/issues/451)). TiviMate (and similar Android players) makes multiple simultaneous Range requests to probe a file before playback; Dispatcharr counts each request as a separate provider connection, blowing through `max_streams=1` before playback even starts. The community plugin [`dispatcharr_vod_fix`](https://github.com/cedric-marcoux/dispatcharr_vod_fix) patches Dispatcharr's request handling to track slots by (client IP + content UUID) so multiple Range requests share one slot. Install it alongside this plugin if your Android clients can't play VOD content.
 

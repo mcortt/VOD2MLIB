@@ -1,8 +1,8 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.13.0 — refresh existing .strm URLs after changing Dispatcharr URL
-          setting; preserve user .nfo edits in refresh mode
+v1.14.0 — remove Refresh Existing Movies setting; URL refresh for
+          movies is now an internal flag triggered only by Full rescan
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -20,7 +20,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.13.0"
+    version = "1.14.0"
     help_url = "https://github.com/R3XCHRIS/VOD2MLIB#readme"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
@@ -122,13 +122,6 @@ class Plugin:
             "help_text": "Create .nfo metadata files for movies"
         },
         {
-            "id": "refresh_existing_movies",
-            "label": "Refresh Existing Movies (URL refresh)",
-            "type": "boolean",
-            "default": False,
-            "help_text": "Rewrite .strm files that already exist on disk so they pick up the current Dispatcharr URL. Use this after changing 'Dispatcharr URL (REQUIRED)' to fix stale addresses in already-generated files. .nfo files are only written when missing, so your edits are preserved. Off by default. On = also rewrite their .strm; in this mode Batch Size caps total writes (new + refreshed)."
-        },
-        {
             "id": "nest_movies_by_category",
             "label": "Nest Movies by Category",
             "type": "boolean",
@@ -224,7 +217,7 @@ class Plugin:
         {
             "id": "generate_movies",
             "label": "[GENERATE] Movies",
-            "description": "Process movies per Batch Size. Existing .strm files are skipped unless 'Refresh Existing Movies' is ON.",
+            "description": "Process movies per Batch Size. Existing .strm files are skipped — use Full rescan to refresh URLs in existing files.",
             "button_label": "Generate",
             "button_variant": "filled",
             "button_color": "green",
@@ -427,18 +420,22 @@ class Plugin:
             folder_path = os.path.join(root_folder, folder_name)
         return folder_path, strm_filename, clean_name, year
 
-    def _generate_movies(self, settings: Dict[str, Any], logger):
+    def _generate_movies(self, settings: Dict[str, Any], logger, refresh_urls: bool = False):
         """Generate movie .strm files according to batch size.
 
         Lazily walks M3UMovieRelation via iterator() so the batch limit is
         honoured even when most candidates are already-done. Stops scanning
         as soon as target_batch new files have been written.
+
+        refresh_urls is an internal flag set by _rescan_all (and not a
+        user-visible setting). When True, existing .strm files are rewritten
+        with the current Dispatcharr URL; .nfo files are still preserved.
         """
         root_folder = settings.get("root_folder", "/VODS/Movies")
         dispatcharr_url = (settings.get("dispatcharr_url") or "").rstrip("/")
         batch_size = settings.get("batch_size") or "250"
         generate_nfo = settings.get("generate_nfo", True)
-        refresh_existing = bool(settings.get("refresh_existing_movies", False))
+        refresh_existing = bool(refresh_urls)
         nest_by_cat = bool(settings.get("nest_movies_by_category", False))
 
         ok, err = self._validate_dispatcharr_url(dispatcharr_url, logger)
@@ -1404,12 +1401,14 @@ class Plugin:
     def _rescan_all(self, settings: Dict[str, Any], logger):
         """Combined scan + generate movies + generate series. Used by the cron schedule.
 
-        Forces both refresh_existing_movies and refresh_existing ON regardless of
-        the saved settings, so cron rescans (and manual Rescan All clicks) reliably
-        pick up new content AND rewrite existing .strm files so URL changes
-        propagate. Existing .nfo files are preserved either way.
+        Forces refresh-existing semantics ON for both movies and series so cron
+        rescans (and manual Rescan All clicks) reliably pick up new content AND
+        rewrite existing .strm files so URL changes propagate. Movies use an
+        internal kwarg on _generate_movies; series uses the user-visible
+        refresh_existing setting (which also enables new-episode discovery).
+        Existing .nfo files are preserved either way.
         """
-        logger.info("Combined rescan: scan + movies + series (Refresh Existing forced ON)")
+        logger.info("Combined rescan: scan + movies + series (refresh URLs forced ON)")
         logger.info("")
 
         scan = self._scan_all_vods(settings, logger)
@@ -1418,10 +1417,9 @@ class Plugin:
 
         logger.info("")
         logger.info("=" * 60)
-        logger.info("Rescan: movies  (refresh_existing_movies=True)")
+        logger.info("Rescan: movies  (refresh_urls=True)")
         logger.info("=" * 60)
-        movie_settings = {**settings, "refresh_existing_movies": True}
-        movies = self._generate_movies(movie_settings, logger)
+        movies = self._generate_movies(settings, logger, refresh_urls=True)
 
         logger.info("")
         logger.info("=" * 60)

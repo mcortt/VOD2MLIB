@@ -1,5 +1,16 @@
 # Changelog
 
+## v1.14.0 — drop the `Refresh Existing Movies` setting
+
+Removes the user-visible `Refresh Existing Movies` toggle added in v1.13.0. The URL-refresh capability for movies stays — but it's now only triggered by `[GENERATE] Full rescan` (and the cron schedule's `rescan_all` target), via an internal kwarg on `_generate_movies` rather than a saved setting. The toggle was almost always redundant: anyone who wanted to refresh URLs would run Full rescan anyway, and that path already forces the refresh internally.
+
+Net behaviour for users:
+- `[GENERATE] Movies` (button or cron target) — same as v1.12.0 and earlier: always skips existing `.strm`.
+- `[GENERATE] Full rescan` (button or cron target `rescan_all`) — same as v1.13.0: rewrites all existing `.strm` with the current Dispatcharr URL, preserves `.nfo` edits.
+- The `Refresh Existing Series` setting is unchanged (still does what it did in v1.13.0 — picks up new episodes AND refreshes existing episode URLs).
+
+If you previously saved `refresh_existing_movies: true` in plugin settings, it's silently ignored after upgrading — no breakage. Just rely on Full rescan when you need a URL refresh.
+
 ## v1.13.0 — URL refresh & user-edit preservation
 
 Fix stale `.strm` URLs after changing `Dispatcharr URL`. Previously, once a movie or episode `.strm` was on disk, the plugin would never rewrite it — so editing the URL setting left every existing file pointing at the old address. The only workaround was `[⚠ DANGER] Clean up` followed by regenerate, which also wiped user-added `.nfo` edits.
