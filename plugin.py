@@ -122,6 +122,13 @@ class Plugin:
             "help_text": "Create .nfo metadata files for movies"
         },
         {
+            "id": "refresh_existing_movies",
+            "label": "Refresh Existing Movies (URL refresh)",
+            "type": "boolean",
+            "default": False,
+            "help_text": "Rewrite .strm files that already exist on disk so they pick up the current Dispatcharr URL. Use this after changing 'Dispatcharr URL (REQUIRED)' to fix stale addresses in already-generated files. .nfo files are only written when missing, so your edits are preserved. Off by default. On = also rewrite their .strm; in this mode Batch Size caps total writes (new + refreshed)."
+        },
+        {
             "id": "nest_movies_by_category",
             "label": "Nest Movies by Category",
             "type": "boolean",
@@ -160,7 +167,7 @@ class Plugin:
             "label": "Refresh Existing Series (rescan-friendly)",
             "type": "boolean",
             "default": False,
-            "help_text": "Re-evaluate series that already have folders, picking up new episodes added upstream. Turn ON for cron rescans."
+            "help_text": "Re-evaluate series that already have folders, picking up new episodes added upstream AND rewriting existing episode .strm files so they pick up the current Dispatcharr URL. .nfo files (including tvshow.nfo) are only written when missing, so your edits are preserved. Turn ON for cron rescans."
         },
         {
             "id": "nest_series_by_category",
@@ -217,7 +224,7 @@ class Plugin:
         {
             "id": "generate_movies",
             "label": "[GENERATE] Movies",
-            "description": "Process movies per Batch Size. Existing .strm files are skipped.",
+            "description": "Process movies per Batch Size. Existing .strm files are skipped unless 'Refresh Existing Movies' is ON.",
             "button_label": "Generate",
             "button_variant": "filled",
             "button_color": "green",
