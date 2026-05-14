@@ -1,10 +1,9 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.14.2 — route scheduled task + test fire to the 'dvr' celery queue
-          so the worker that actually has the task registered picks it
-          up. Fixes silently-failing nightly cron and 'unregistered
-          task' errors on test fire.
+v1.14.3 — task bumps PeriodicTask.last_run_at on completion so Show
+          Status reflects manual Test fire runs (which bypass beat)
+          and the timestamp tracks true completion, not beat dispatch.
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -22,7 +21,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.14.2"
+    version = "1.14.3"
     help_url = "https://github.com/R3XCHRIS/VOD2MLIB#readme"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
@@ -1704,7 +1703,7 @@ class Plugin:
         logger.info("Test fire enqueued: action=%s task_id=%s", action, async_result.id)
         return {
             "status": "ok",
-            "message": f"Test fire enqueued ({action}); task id {async_result.id}. Verify via [SCHEDULE] Show status — last_run_at updates when the worker finishes.",
+            "message": f"Test fire enqueued ({action}); task id {async_result.id}. [SCHEDULE] Show status updates when the worker finishes (timestamp = completion time).",
             "fired_action": action,
             "task_id": async_result.id,
         }
@@ -1715,10 +1714,26 @@ try:
 
     @_vod2mlib_shared_task(name=Plugin.SCHEDULED_TASK_CELERY_NAME)
     def _vod2mlib_scheduled_rescan(action="rescan_all", settings=None):
-        """Celery entry point invoked by the periodic task registered via _apply_schedule."""
+        """Celery entry point invoked by the periodic task registered via _apply_schedule.
+
+        On completion, bumps PeriodicTask.last_run_at so Show Status reflects
+        manual Test fire runs (which bypass beat) and updates beat-dispatched
+        runs at *completion* time rather than dispatch-start. Without this the
+        UI would show stale timestamps for Test fire clicks and silently mask
+        ticks that beat dispatched but the worker rejected/failed.
+        """
         import logging
         logger = logging.getLogger("vod2mlib.schedule")
-        return Plugin().run(action, {}, {"logger": logger, "settings": settings or {}})
+        result = Plugin().run(action, {}, {"logger": logger, "settings": settings or {}})
+        try:
+            from django.utils import timezone
+            from django_celery_beat.models import PeriodicTask
+            PeriodicTask.objects.filter(name=Plugin.SCHEDULE_TASK_NAME).update(
+                last_run_at=timezone.now(),
+            )
+        except Exception as e:
+            logger.warning("Failed to bump PeriodicTask.last_run_at: %s", e)
+        return result
 except Exception as _celery_register_err:
     # Celery may not be importable in some environments. Log to stderr so the
     # cause is visible if the user wonders why scheduled rescans never run.

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.14.3 — Show Status reflects Test fire + task completion
+
+The Celery task now bumps `PeriodicTask.last_run_at` on completion. Previously, that field was updated only by django-celery-beat at dispatch time, which had two consequences:
+
+- **Manual Test fire never showed up.** `[SCHEDULE] Test fire now` uses `send_task()` (bypasses beat), so beat never got the chance to update the field. Test fire returned an "enqueued" toast but `[SCHEDULE] Show status` stayed frozen even after the task succeeded.
+- **Cron failures looked like successes.** Beat increments `last_run_at` and `total_run_count` when it *dispatches*, not when the worker *completes*. A task that beat fired but the worker rejected (the v1.14.1 and earlier `unregistered task` failure mode) still made Show Status look healthy.
+
+Now `last_run_at` becomes "last time the task actually finished" — Test fire clicks show up after completion, and a failing tick leaves `last_run_at` stale, a real signal you can spot. `total_run_count` is still beat-owned (counts dispatches) so a divergence between `last_run_at` and a recent `total_run_count` increment now indicates task failure.
+
 ## v1.14.2 — fix silently-failing scheduled rescans (route to `dvr` queue)
 
 Scheduled rescans have been silently failing since at least v1.4 — beat fires the task at 03:00, the default celery worker receives it, looks up `vod2mlib.scheduled_rescan` in its registry, doesn't find it (plugins live outside `INSTALLED_APPS`, the upstream hotfix in `dispatcharr/celery.py` crashes with `AppRegistryNotReady` at module-import time, and `apps.plugins.AppConfig.ready()` short-circuits via `should_skip_initialization()` when `'celery'` is in argv), and raises `KeyError: 'vod2mlib.scheduled_rescan'`. The `total_run_count` on the periodic task still increments because that field counts beat dispatches, not successful worker executions — so the failure looks invisible from `[SCHEDULE] Show status`.

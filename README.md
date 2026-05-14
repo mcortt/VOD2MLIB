@@ -7,7 +7,7 @@
 <p align="center">A Dispatcharr plugin that turns your VOD catalogue into a folder of <code>.strm</code> files (with optional NFO metadata) that media servers — Jellyfin, Emby, Kodi, ChannelsDVR — can index and play.</p>
 
 <p align="center">
-  <i>v1.14.2 — slug <code>vod2mlib</code></i>
+  <i>v1.14.3 — slug <code>vod2mlib</code></i>
 </p>
 
 > [!WARNING]
