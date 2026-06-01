@@ -10,35 +10,14 @@
   <i>v1.14.3 — slug <code>vod2mlib</code></i>
 </p>
 
-> [!WARNING]
-> ## ⚠ Use the `:dev` Dispatcharr image until the next tagged release
->
-> This plugin's scheduled rescan depends on an upstream Dispatcharr fix that is merged into the `dev` branch but predates the current `:latest` image:
->
-> - **Scheduled tasks need [Dispatcharr/Dispatcharr#1245](https://github.com/Dispatcharr/Dispatcharr/pull/1245)** to register plugin `@shared_task` decorators with Celery workers. Without it, beat dispatches the rescan and the default worker rejects it with `Received unregistered task`. v1.14.2 ships a `queue="dvr"` workaround that keeps the rescan working on `:latest` by routing to a worker that does end up with plugin tasks registered (DVR's thread pool, concurrency 20 — no practical impact on actual DVR recording capacity). `:dev` removes the need for that routing entirely.
->
-> Use the `:dev` image until the next tagged Dispatcharr release ships the fix:
->
-> ```yaml
-> # docker-compose.yml
-> services:
->   dispatcharr:
->     image: ghcr.io/dispatcharr/dispatcharr:dev
->     # ...rest of your config
-> ```
->
-> Once a stable release ships #1245, this warning will be removed and `min_dispatcharr_version` in `plugin.json` will be bumped accordingly.
->
-> **If you set up your schedule on v1.14.1 or earlier**, click `[SCHEDULE] Apply / Update` once after upgrading to v1.14.2+ so the stored task gets the `queue="dvr"` routing. Without that re-apply, beat will keep dispatching to the default queue (where the worker rejects the task with `unregistered task`) and `[SCHEDULE] Show status` will misleadingly report `total_run_count` increasing because that field is incremented on dispatch, not on successful execution.
->
-> Manual generate / scan / cleanup actions are unaffected — they run synchronously in the uwsgi process and don't depend on Celery worker registration.
+> **Note on scheduled rescans.** The cron task routes via Dispatcharr's `dvr` Celery worker as a workaround for an upstream plugin-task-registration issue affecting the default prefork worker pool ([Dispatcharr#1244](https://github.com/Dispatcharr/Dispatcharr/issues/1244)). The routing is transparent — no user action required for new installs. If you originally set up your schedule on **v1.14.1 or earlier**, click `[SCHEDULE] Apply / Update` once after upgrading so the stored task picks up the new routing.
 
 > **Plex users:** Plex does *not* play `.strm` files. Jellyfin and ChannelsDVR do. See [Plex compatibility](#plex-compatibility) below.
 
 ## Credits
 
 - **Original author:** [shedunraid](https://github.com/shedunraid) — created v0.x–v1.3 ([upstream repo](https://github.com/shedunraid/VOD2MLIB)).
-- **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling, bug fixes, and packaging for the [official Dispatcharr Plugins catalogue](https://github.com/Dispatcharr/Plugins). Upstream has been dormant since early 2026; this fork continues maintenance.
+- **Fork maintainer:** [R3XCHRIS](https://github.com/R3XCHRIS) — v1.4+ adds scheduling and bug fixes. Listed in the [official Dispatcharr Plugins catalogue](https://github.com/Dispatcharr/Plugins/tree/main/plugins/vod2mlib) since v1.14.3. Upstream has been dormant since early 2026; this fork continues maintenance.
 - MIT License.
 
 ---
@@ -55,9 +34,12 @@
          - /opt/dispatcharr-vods:/VODS
    ```
 
-2. **Zip the plugin files** (`plugin.py`, `plugin.json`, `__init__.py`, `logo.png`, `LICENSE`, `README.md`, `requirements.txt`). Or grab the prebuilt zip from a [GitHub release](https://github.com/R3XCHRIS/VOD2MLIB/releases).
+2. **Install the plugin** — two options:
 
-3. **Dispatcharr → Plugins → Import** → upload the zip → enable the plugin.
+   - **From the official catalogue (recommended):** Dispatcharr → Plugins → **Find Plugins** → search "VOD to Media Library" → Install. Updates also surface here.
+   - **Manual:** download `plugin-vod2mlib-v<version>.zip` from a [GitHub release](https://github.com/R3XCHRIS/VOD2MLIB/releases), then Dispatcharr → Plugins → **Import** → upload the zip.
+
+3. Enable the plugin from the Plugins tab.
 
 Requires Dispatcharr **v0.24.0** or later. The auto-rescan feature additionally needs `django-celery-beat` (Dispatcharr ships with it).
 
