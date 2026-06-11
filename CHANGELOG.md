@@ -1,5 +1,19 @@
 # Changelog
 
+## v1.15.2 — active-account filter, bare-year cleanup, schedule-drift warning
+
+Four community-reported fixes, all backwards-compatible.
+
+- **Scan & Generate now ignore inactive providers (thanks Motronic).** Previously the plugin counted every `Movie`/`Series` row and generated `.strm` files for *all* relations — including content whose M3U provider had been deactivated upstream. So disabling a provider in Dispatcharr left its content in the plugin's Scan totals and produced dead `.strm` files. Both `[LIBRARY] Catalogue snapshot` and `[GENERATE]` now filter to relations on an **active** M3U account (`m3u_account__is_active=True`), matching Dispatcharr's own VODs UI and proxy. Scan additionally reports an **orphaned** count (content with no active provider) so the gap is explicit. *If you have orphaned `.strm` files from a previous run on now-inactive content, run `[⚠ DANGER] Clean up` once, then re-generate.*
+
+- **Bare trailing years are stripped from folder names (thanks Lid).** Providers that ship titles like `Wicked: For Good - 2025` (bare year, no parens) previously produced `Wicked: For Good - 2025 (2025)/` once the plugin added its own `(YYYY)` suffix. New `_strip_redundant_trailing_year` helper removes a bare trailing year when it matches the known year — and, when no year is otherwise known, **adopts** the bare trailing year as the folder year. Guards real titles: `Blade Runner 2049` (year 2017), `Room 1408` (year 2007), and `1984` / `2012` (where the year *is* the title) are all preserved.
+
+- **Show Status warns when settings drift from the cron snapshot (thanks sjsteve).** The cron job runs against a snapshot of your settings taken at the last `[SCHEDULE] Apply / Update`. If you change a setting afterwards without re-applying, `[SCHEDULE] Show status` now flags exactly which keys differ and reminds you to re-click Apply. (Compared over the snapshot's keys only, so a plugin upgrade that adds new settings won't raise a false warning.)
+
+- **Clearer folder-migration help text.** The `Append TMDB ID`, `Dedupe Movies`, and `Dedupe Series` settings now spell out that toggling them on an already-generated library does NOT rename folders in place — you get new names alongside the old ones until you `[⚠ DANGER] Clean up` and re-generate.
+
+Defaults unchanged; no settings migration. 17 new unit tests (165 total, was 148).
+
 ## v1.15.1 — dedupe movies/series across categories
 
 Closes the first GitHub issue against this repo ([#1](https://github.com/R3XCHRIS/VOD2MLIB/issues/1), thanks **FCSO-byte**).

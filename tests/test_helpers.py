@@ -1099,3 +1099,140 @@ class TestDedupeAcrossCategoriesDecision:
         processed, deduped = self._simulate_dedupe(uuids, dedupe_on=True)
         assert processed == ["zebra", "ant", "horse"]
         assert deduped == 2
+
+
+# ---------- _strip_redundant_trailing_year (v1.15.2) ----------
+
+class TestStripRedundantTrailingYear:
+    """Bare trailing year de-duplication for folder names. Mode (b):
+    strip-when-matching, and adopt-when-no-year-known."""
+
+    def test_lid_example_strips_when_matching_db_year(self, p):
+        # "Wicked: For Good - 2025" + DB year 2025 -> "Wicked: For Good"
+        name, year = p._strip_redundant_trailing_year("Wicked: For Good - 2025", 2025)
+        assert name == "Wicked: For Good"
+        assert year == 2025
+
+    def test_strips_with_only_a_space_separator(self, p):
+        name, year = p._strip_redundant_trailing_year("The Matrix 1999", 1999)
+        assert name == "The Matrix"
+        assert year == 1999
+
+    def test_adopts_bare_year_when_no_db_year(self, p):
+        # No DB year, bare trailing year present -> adopt it AND strip.
+        name, year = p._strip_redundant_trailing_year("Wicked: For Good - 2025", None)
+        assert name == "Wicked: For Good"
+        assert year == 2025
+
+    def test_does_not_adopt_implausible_trailing_number(self, p):
+        # Room 1408, no DB year: 1408 < 1900 -> not a year, leave it.
+        name, year = p._strip_redundant_trailing_year("Room 1408", None)
+        assert name == "Room 1408"
+        assert year is None
+
+    def test_preserves_blade_runner_2049(self, p):
+        # Trailing 2049 != DB year 2017 -> it's part of the title, keep it.
+        name, year = p._strip_redundant_trailing_year("Blade Runner 2049", 2017)
+        assert name == "Blade Runner 2049"
+        assert year == 2017
+
+    def test_preserves_room_1408_with_db_year(self, p):
+        name, year = p._strip_redundant_trailing_year("Room 1408", 2007)
+        assert name == "Room 1408"
+        assert year == 2007
+
+    def test_year_is_the_whole_title_not_emptied(self, p):
+        # "1984" with year 1984 must NOT become "" — the year is the title.
+        name, year = p._strip_redundant_trailing_year("1984", 1984)
+        assert name == "1984"
+        assert year == 1984
+        # Same for "2012" adopt path.
+        name2, year2 = p._strip_redundant_trailing_year("2012", None)
+        assert name2 == "2012"
+
+    def test_no_trailing_year_is_noop(self, p):
+        name, year = p._strip_redundant_trailing_year("Avatar", 2009)
+        assert name == "Avatar"
+        assert year == 2009
+
+    def test_not_part_of_longer_digit_run(self, p):
+        # Negative lookbehind: a 5-digit trailing run isn't treated as a year.
+        name, year = p._strip_redundant_trailing_year("Catalog 12345", None)
+        assert name == "Catalog 12345"
+        assert year is None
+
+    def test_empty_input(self, p):
+        assert p._strip_redundant_trailing_year("", 2025) == ("", 2025)
+        assert p._strip_redundant_trailing_year(None, None) == (None, None)
+
+
+class TestMovieTargetPathsBareYear:
+    """End-to-end: the bare-year fix flows through _movie_target_paths."""
+
+    def test_bare_trailing_year_no_double(self, p):
+        # NB: the ':' is removed downstream by _sanitize_filename (invalid on
+        # Windows), so the folder is "Wicked For Good (2025)" — the point of
+        # this test is the absence of the doubled "- 2025 (2025)".
+        class M:
+            id = 1
+            uuid = "x"
+            name = "Wicked: For Good - 2025"
+            year = 2025
+        folder, strm, name, year = p._movie_target_paths(M(), "/VODS/Movies")
+        assert folder == "/VODS/Movies/Wicked For Good (2025)"
+        assert strm == "Wicked For Good (2025).strm"
+        assert year == 2025
+
+    def test_bare_trailing_year_adopted_when_db_year_missing(self, p):
+        class M:
+            id = 2
+            uuid = "y"
+            name = "Wicked: For Good - 2025"
+            year = None
+        folder, strm, name, year = p._movie_target_paths(M(), "/VODS/Movies")
+        assert folder == "/VODS/Movies/Wicked For Good (2025)"
+        assert year == 2025
+
+
+# ---------- _settings_drift_keys (v1.15.2) ----------
+
+class _FakeTask:
+    def __init__(self, kwargs_str):
+        self.kwargs = kwargs_str
+
+
+class TestSettingsDriftKeys:
+    def test_no_drift_when_identical(self, p):
+        import json
+        snap = {"action": "rescan_all", "settings": {"batch_size": "250", "generate_nfo": True}}
+        task = _FakeTask(json.dumps(snap))
+        current = {"batch_size": "250", "generate_nfo": True, "schedule_cron": "0 3 * * *"}
+        assert p._settings_drift_keys(task, current) == []
+
+    def test_detects_changed_value(self, p):
+        import json
+        snap = {"settings": {"append_tmdb_id_to_folder": False, "batch_size": "250"}}
+        task = _FakeTask(json.dumps(snap))
+        current = {"append_tmdb_id_to_folder": True, "batch_size": "250"}
+        assert p._settings_drift_keys(task, current) == ["append_tmdb_id_to_folder"]
+
+    def test_new_setting_not_in_snapshot_is_not_flagged(self, p):
+        # A setting added by a plugin upgrade (absent from the old snapshot)
+        # must not raise a false drift warning.
+        import json
+        snap = {"settings": {"batch_size": "250"}}
+        task = _FakeTask(json.dumps(snap))
+        current = {"batch_size": "250", "dedupe_movies_across_categories": True}
+        assert p._settings_drift_keys(task, current) == []
+
+    def test_malformed_kwargs_returns_empty(self, p):
+        task = _FakeTask("{not valid json")
+        assert p._settings_drift_keys(task, {"batch_size": "250"}) == []
+
+    def test_schedule_prefixed_keys_ignored(self, p):
+        import json
+        snap = {"settings": {"batch_size": "250"}}
+        task = _FakeTask(json.dumps(snap))
+        # changing schedule_cron must NOT count as settings drift
+        current = {"batch_size": "250", "schedule_cron": "0 4 * * *"}
+        assert p._settings_drift_keys(task, current) == []

@@ -1,10 +1,10 @@
 """
 VOD to Media Library — Dispatcharr VOD .strm Generator Plugin
 (slug: vod2mlib)
-v1.15.1 — optional Dedupe Movies/Series Across Categories toggle:
-          when nesting is on and a title is tagged with multiple
-          categories upstream, only the first-encountered category
-          gets the folder (alphabetical). Closes issue #1.
+v1.15.2 — filter Scan + Generate to active M3U accounts only; strip
+          bare trailing year from titles (Wicked: For Good - 2025);
+          warn on Show Status when settings drift from the cron
+          snapshot; clearer folder-migration help text.
 
 MIT License
 Copyright (c) 2025-2026 shedunraid (original author)
@@ -22,7 +22,7 @@ class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
     
     name = "VOD to Media Library"
-    version = "1.15.1"
+    version = "1.15.2"
     help_url = "https://github.com/R3XCHRIS/VOD2MLIB#readme"
     description = (
         "Convert Dispatcharr VODs into media-server-friendly .strm files, with "
@@ -57,6 +57,13 @@ class Plugin:
     # trailing junk. Truncating at the first (YYYY) yields "Cool Hand Luke 4K"
     # which then has quality tokens stripped to give "Cool Hand Luke".
     _FIRST_YEAR_RE = re.compile(r'\((\d{4})\)')
+
+    # Bare trailing year (no parens) at the very end of a title, e.g.
+    # "Wicked: For Good - 2025". The negative lookbehind stops it matching the
+    # tail of a longer digit run ("12345"). Used by
+    # _strip_redundant_trailing_year to de-duplicate the year a provider stuffs
+    # into the title against the (YYYY) suffix the plugin adds.
+    _BARE_TRAILING_YEAR_RE = re.compile(r'(?<!\d)(\d{4})\s*$')
 
     # Quality / encoding tokens commonly stuffed into provider VOD titles.
     # Stripped from folder names so media-server scrapers see a clean title.
@@ -151,14 +158,14 @@ class Plugin:
             "label": "Dedupe Movies Across Categories",
             "type": "boolean",
             "default": False,
-            "help_text": "When `Nest Movies by Category` is ON and a movie is tagged with multiple categories upstream (e.g. 'Action' AND 'Sci-Fi'), write the `.strm` under the first category only (alphabetical by category name) instead of duplicating across all of them. No effect when `Nest Movies by Category` is OFF — in that case multi-category movies already resolve to the same folder. Use this when you want one folder per movie regardless of provider tagging; your media server's genre tags still reflect every category via the NFO."
+            "help_text": "When `Nest Movies by Category` is ON and a movie is tagged with multiple categories upstream (e.g. 'Action' AND 'Sci-Fi'), write the `.strm` under the first category only (alphabetical by category name) instead of duplicating across all of them. No effect when `Nest Movies by Category` is OFF — in that case multi-category movies already resolve to the same folder. Use this when you want one folder per movie regardless of provider tagging; your media server's genre tags still reflect every category via the NFO. ⚠ MIGRATION: changing this on an already-generated library does NOT remove the old duplicate folders — it just stops creating new ones. To clean up existing duplicates, run `[⚠ DANGER] Clean up Movies` once, then re-generate."
         },
         {
             "id": "append_tmdb_id_to_folder",
             "label": "Append TMDB ID to folder names",
             "type": "boolean",
             "default": False,
-            "help_text": "Append `{tmdb-NNN}` to every Movies and Series folder name when a TMDB ID is known — e.g. `Cool Hand Luke (1967) {tmdb-378}/`. Plex's Personal Media agent and ChannelsDVR's local-media scraper both honour this convention for forced exact matches, which is the safest defence against name collisions and bad metadata scrapes. Off by default because flipping it on an existing library renames every folder — the plugin creates the new names alongside the old ones; you'd need to `[⚠ DANGER] Clean up` first or accept duplicates."
+            "help_text": "Append `{tmdb-NNN}` to every Movies and Series folder name when a TMDB ID is known — e.g. `Cool Hand Luke (1967) {tmdb-378}/`. Plex's Personal Media agent and ChannelsDVR's local-media scraper both honour this convention for forced exact matches, which is the safest defence against name collisions and bad metadata scrapes. ⚠ MIGRATION: the plugin does NOT rename existing folders in place — turning this on (or off) for an already-generated library writes the new folder names ALONGSIDE the old ones, creating duplicates. To switch cleanly, run `[⚠ DANGER] Clean up Movies` / `Series` first, then re-generate; or accept the duplicates until the old folders age out."
         },
         {
             "id": "_section_series",
@@ -206,7 +213,7 @@ class Plugin:
             "label": "Dedupe Series Across Categories",
             "type": "boolean",
             "default": False,
-            "help_text": "When `Nest Series by Category` is ON and a series is tagged with multiple categories upstream, write the series folder + episodes under the first category only (alphabetical by category name) instead of duplicating across all of them. No effect when `Nest Series by Category` is OFF."
+            "help_text": "When `Nest Series by Category` is ON and a series is tagged with multiple categories upstream, write the series folder + episodes under the first category only (alphabetical by category name) instead of duplicating across all of them. No effect when `Nest Series by Category` is OFF. ⚠ MIGRATION: changing this on an already-generated library does NOT remove the old duplicate folders — run `[⚠ DANGER] Clean up Series` once, then re-generate, to clean them up."
         },
         {
             "id": "_section_schedule",
@@ -397,24 +404,51 @@ class Plugin:
             return {"status": "error", "message": f"Import error: {e}"}
 
         try:
-            movie_count = Movie.objects.count()
-            series_count = Series.objects.count()
-            movie_relations = M3UMovieRelation.objects.count()
-            series_relations = M3USeriesRelation.objects.count()
+            # Counts are filtered to content that has at least one relation on an
+            # ACTIVE M3U account — same definition Dispatcharr's own VODs UI and
+            # the proxy use. Generate only writes active content, so the scan
+            # totals now match what will actually be produced. Orphaned content
+            # (no active provider) is surfaced separately so the gap is visible.
+            active_movie = (
+                Movie.objects
+                .filter(m3u_relations__m3u_account__is_active=True)
+                .distinct().count()
+            )
+            active_series = (
+                Series.objects
+                .filter(m3u_relations__m3u_account__is_active=True)
+                .distinct().count()
+            )
+            total_movie = Movie.objects.count()
+            total_series = Series.objects.count()
+            orphan_movie = total_movie - active_movie
+            orphan_series = total_series - active_series
+            movie_relations = M3UMovieRelation.objects.filter(m3u_account__is_active=True).count()
+            series_relations = M3USeriesRelation.objects.filter(m3u_account__is_active=True).count()
 
             logger.info("=" * 60)
-            logger.info("MOVIES: %d unique  (%d M3U relations)", movie_count, movie_relations)
-            logger.info("SERIES: %d unique  (%d M3U relations)", series_count, series_relations)
+            logger.info("MOVIES: %d active  (%d M3U relations)", active_movie, movie_relations)
+            if orphan_movie:
+                logger.info("        %d orphaned — no active provider (won't generate)", orphan_movie)
+            logger.info("SERIES: %d active  (%d M3U relations)", active_series, series_relations)
+            if orphan_series:
+                logger.info("        %d orphaned — no active provider (won't generate)", orphan_series)
             logger.info("=" * 60)
             logger.info("")
             logger.info("Use 'Generate Movie .strm Files' for movies")
             logger.info("Use 'Generate Series .strm Files' for series")
-            
+
+            message = f"Found {active_movie} movies and {active_series} series"
+            if orphan_movie or orphan_series:
+                message += f" ({orphan_movie + orphan_series} orphaned — no active provider)"
+
             return {
                 "status": "ok",
-                "message": f"Found {movie_count} movies and {series_count} series",
-                "movies": movie_count,
-                "series": series_count
+                "message": message,
+                "movies": active_movie,
+                "series": active_series,
+                "movies_orphaned": orphan_movie,
+                "series_orphaned": orphan_series,
             }
         except Exception as e:
             logger.error("Scan failed: %s", e)
@@ -449,6 +483,7 @@ class Plugin:
         raw_name = movie.name or f"Unknown Movie {movie.id}"
         clean_name, title_year = self._extract_clean_name_and_year(raw_name)
         year = movie.year or title_year
+        clean_name, year = self._strip_redundant_trailing_year(clean_name, year)
         safe = self._sanitize_filename(clean_name)
         if year:
             base_name = f"{safe} ({year})"
@@ -463,6 +498,47 @@ class Plugin:
         else:
             folder_path = os.path.join(root_folder, folder_name)
         return folder_path, strm_filename, clean_name, year
+
+    def _strip_redundant_trailing_year(self, name, year):
+        """Remove a bare trailing year a provider stuffed into the title, so it
+        doesn't get doubled against the `(YYYY)` suffix the plugin adds.
+
+        Two modes:
+          * If `year` is known and the title ends with that exact year
+            (optionally after a separator), strip it — `Wicked: For Good - 2025`
+            + year 2025 -> `Wicked: For Good`.
+          * If `year` is None and the title ends with a plausible bare year
+            (1900–2100), ADOPT it as the year and strip it — so
+            `Wicked: For Good - 2025` with no DB year still yields a clean
+            `Wicked: For Good (2025)/` folder.
+
+        Guards:
+          * `Blade Runner 2049` (DB year 2017) — trailing 2049 ≠ 2017, kept.
+          * `Room 1408` (DB year 2007) — 1408 ≠ 2007 and < 1900, kept.
+          * `1984` / `2012` where the year IS the whole title — never stripped
+            to empty.
+
+        Returns `(name, year)` — `year` may be newly adopted in mode two.
+        """
+        if not name:
+            return name, year
+        m = self._BARE_TRAILING_YEAR_RE.search(name)
+        if not m:
+            return name, year
+        trailing = int(m.group(1))
+        if year is None:
+            if not (1900 <= trailing <= 2100):
+                return name, year
+            adopted = trailing
+        elif trailing == year:
+            adopted = year
+        else:
+            return name, year
+        stripped = name[: m.start()].rstrip(" -–—_:.,").strip()
+        if not stripped:
+            # The year is the entire title (e.g. "1984", "2012") — keep it.
+            return name, year
+        return stripped, adopted
 
     def _apply_tmdb_suffix(self, base_name: str, obj, append_tmdb_id: bool) -> str:
         """Append `{tmdb-NNN}` to a folder base name when the toggle is on and
@@ -524,7 +600,14 @@ class Plugin:
             return {"status": "error", "message": f"Import error: {e}"}
 
         try:
-            query = M3UMovieRelation.objects.select_related('movie', 'm3u_account', 'category')
+            # Only generate for relations on an ACTIVE M3U account — content
+            # whose provider was deactivated upstream must not produce .strm
+            # files (they'd point at a dead provider). Matches the scan totals.
+            query = (
+                M3UMovieRelation.objects
+                .select_related('movie', 'm3u_account', 'category')
+                .filter(m3u_account__is_active=True)
+            )
             if dedupe_across_cats:
                 # Deterministic "first category wins" requires a stable sort.
                 # Alphabetical by category name, then relation id as a tiebreaker.
@@ -683,6 +766,7 @@ class Plugin:
         raw_name = series.name or f"Unknown Series {series.id}"
         clean_name, title_year = self._extract_clean_name_and_year(raw_name)
         year = series.year or title_year
+        clean_name, year = self._strip_redundant_trailing_year(clean_name, year)
         safe = self._sanitize_filename(clean_name)
         base_name = f"{safe} ({year})" if year else safe
         folder_name = self._apply_tmdb_suffix(base_name, series, append_tmdb_id)
@@ -737,7 +821,13 @@ class Plugin:
             return {"status": "error", "message": f"Import error: {e}"}
 
         try:
-            query = M3USeriesRelation.objects.select_related('series', 'm3u_account', 'category')
+            # Active-account filter — see _generate_movies. Deactivated providers
+            # must not produce episode .strm files.
+            query = (
+                M3USeriesRelation.objects
+                .select_related('series', 'm3u_account', 'category')
+                .filter(m3u_account__is_active=True)
+            )
             if dedupe_across_cats:
                 # See _generate_movies for rationale — deterministic
                 # alphabetical-by-category-name ordering so "first category wins"
@@ -1820,6 +1910,8 @@ class Plugin:
         last_run = str(task.last_run_at) if task.last_run_at else "never"
         state = "enabled" if task.enabled else "disabled"
 
+        drifted = self._settings_drift_keys(task, settings)
+
         logger.info("Schedule: %s", task.name)
         logger.info("  Enabled:    %s", task.enabled)
         logger.info("  Cron:       %s", cron_str)
@@ -1828,11 +1920,24 @@ class Plugin:
         logger.info("  Kwargs:     %s", task.kwargs)
         logger.info("  Last run:   %s", last_run)
         logger.info("  Total runs: %s", task.total_run_count)
+        if drifted:
+            logger.warning(
+                "  ⚠ Settings changed since last Apply Schedule: %s", ", ".join(drifted)
+            )
+            logger.warning(
+                "    Cron is still running the OLD snapshot — click "
+                "'[SCHEDULE] Apply / Update' to refresh it."
+            )
 
         message = (
             f"Schedule {state} — cron '{cron_str}' ({tz_str}), "
             f"last run {last_run}, total runs {task.total_run_count}"
         )
+        if drifted:
+            message = (
+                f"⚠ Settings changed since last Apply ({', '.join(drifted)}) — "
+                f"re-click Apply Schedule to refresh the cron snapshot. " + message
+            )
         return {
             "status": "ok",
             "message": message,
@@ -1843,7 +1948,28 @@ class Plugin:
             "task": task.task,
             "last_run_at": str(task.last_run_at) if task.last_run_at else None,
             "total_run_count": task.total_run_count,
+            "settings_drifted": drifted,
         }
+
+    def _settings_drift_keys(self, task, current_settings):
+        """Return the list of setting keys whose live value differs from the
+        snapshot stored in the PeriodicTask at the last Apply Schedule.
+
+        Compared over the SNAPSHOT's keys only (intersection), so newly-added
+        settings introduced by a plugin upgrade don't raise a false "changed"
+        flag for users who never touched them. `schedule_`-prefixed keys are
+        excluded — they're cron config, not part of the rescan snapshot.
+        """
+        import json
+        try:
+            stored = (json.loads(task.kwargs or "{}") or {}).get("settings") or {}
+        except (ValueError, TypeError):
+            return []
+        current = {
+            k: v for k, v in (current_settings or {}).items()
+            if not k.startswith("schedule_")
+        }
+        return sorted(k for k in stored if stored.get(k) != current.get(k))
 
     def _schedule_test_fire(self, settings: Dict[str, Any], logger):
         """Enqueue the registered schedule's task on Celery, returning immediately.
