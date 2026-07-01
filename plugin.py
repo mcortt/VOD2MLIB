@@ -168,6 +168,13 @@ class Plugin:
             "help_text": "Append `{tmdb-NNN}` to every Movies and Series folder name when a TMDB ID is known — e.g. `Cool Hand Luke (1967) {tmdb-378}/`. Plex's Personal Media agent and ChannelsDVR's local-media scraper both honour this convention for forced exact matches, which is the safest defence against name collisions and bad metadata scrapes. ⚠ MIGRATION: the plugin does NOT rename existing folders in place — turning this on (or off) for an already-generated library writes the new folder names ALONGSIDE the old ones, creating duplicates. To switch cleanly, run `[⚠ DANGER] Clean up Movies` / `Series` first, then re-generate; or accept the duplicates until the old folders age out."
         },
         {
+            "id": "omit_stream_id",
+            "label": "Don't pin .strm files to a specific provider stream",
+            "type": "boolean",
+            "default": False,
+            "help_text": "When ON, .strm URLs omit ?stream_id=, so Dispatcharr's VOD proxy resolves and fails over across every account carrying the title instead of being locked to the one relation this plugin happened to pick. Requires a patched Dispatcharr with VOD failover support (PR #1398). When OFF (default), the .strm is pinned to this plugin's selected relation, matching original behavior."
+        },
+        {
             "id": "_section_series",
             "label": "[SERIES]",
             "type": "info",
@@ -576,6 +583,7 @@ class Plugin:
         nest_by_cat = bool(settings.get("nest_movies_by_category", False))
         dedupe_across_cats = bool(settings.get("dedupe_movies_across_categories", False))
         append_tmdb_id = bool(settings.get("append_tmdb_id_to_folder", False))
+        omit_stream_id = bool(settings.get("omit_stream_id", False))
 
         ok, err = self._validate_dispatcharr_url(dispatcharr_url, logger)
         if not ok:
@@ -664,8 +672,10 @@ class Plugin:
                 skipped += 1
                 continue
 
-            proxy_url = f"{dispatcharr_url}/proxy/vod/movie/{movie.uuid}?stream_id={relation.stream_id}"
-
+            if omit_stream_id:
+                proxy_url = f"{dispatcharr_url}/proxy/vod/movie/{movie.uuid}"
+            else:
+                proxy_url = f"{dispatcharr_url}/proxy/vod/movie/{movie.uuid}?stream_id={relation.stream_id}"
             written = created_strm + refreshed_strm
             log_this = (written + 1) % self.LOG_EVERY == 1 or written < self.LOG_FIRST_N
             verb = "refreshed" if is_existing else "created"
@@ -797,6 +807,7 @@ class Plugin:
         nest_by_cat = bool(settings.get("nest_series_by_category", False))
         dedupe_across_cats = bool(settings.get("dedupe_series_across_categories", False))
         append_tmdb_id = bool(settings.get("append_tmdb_id_to_folder", False))
+        omit_stream_id = bool(settings.get("omit_stream_id", False))
 
         ok, err = self._validate_dispatcharr_url(dispatcharr_url, logger)
         if not ok:
@@ -925,6 +936,7 @@ class Plugin:
                     refresh_existing,
                     nest_by_cat,
                     append_tmdb_id,
+                    omit_stream_id,
                 ): series_rel
                 for series_rel in to_process
             }
@@ -997,7 +1009,7 @@ class Plugin:
             "failures": failures,
         }
 
-    def _process_single_series(self, series_rel, dispatcharr_url, generate_nfo, series_root, logger, refresh_existing=False, nest_by_cat=False, append_tmdb_id=False):
+    def _process_single_series(self, series_rel, dispatcharr_url, generate_nfo, series_root, logger, refresh_existing=False, nest_by_cat=False, append_tmdb_id=False, omit_stream_id=False):
         """Process a single series. Idempotent: writes only missing episode files.
 
         With refresh_existing=False, callers should pre-filter already-done
@@ -1087,7 +1099,10 @@ class Plugin:
                     continue
 
                 os.makedirs(season_folder, exist_ok=True)
-                proxy_url = f"{dispatcharr_url}/proxy/vod/episode/{episode.uuid}?stream_id={episode_rel.stream_id}"
+                if omit_stream_id:
+                    proxy_url = f"{dispatcharr_url}/proxy/vod/episode/{episode.uuid}"
+                else:
+                    proxy_url = f"{dispatcharr_url}/proxy/vod/episode/{episode.uuid}?stream_id={episode_rel.stream_id}"
                 with open(strm_path, 'w', encoding='utf-8') as f:
                     f.write(proxy_url)
                 if is_existing:
