@@ -547,6 +547,20 @@ class Plugin:
             return name, year
         return stripped, adopted
 
+    def _build_proxy_url(self, dispatcharr_url, content_type, uuid, stream_id, omit_stream_id=False):
+        """Build a Dispatcharr VOD proxy URL for a .strm file.
+
+        Omits the `?stream_id=` query parameter when `omit_stream_id` is set
+        (or when no stream_id is available), letting Dispatcharr's VOD proxy
+        pick / fail over across accounts by priority instead of being pinned
+        to one relation — see #5 and Dispatcharr#1398. Included by default so
+        existing behaviour is unchanged.
+        """
+        base = f"{dispatcharr_url}/proxy/vod/{content_type}/{uuid}"
+        if omit_stream_id or not stream_id:
+            return base
+        return f"{base}?stream_id={stream_id}"
+
     def _apply_tmdb_suffix(self, base_name: str, obj, append_tmdb_id: bool) -> str:
         """Append `{tmdb-NNN}` to a folder base name when the toggle is on and
         the object exposes a tmdb_id. Returns unchanged otherwise.
@@ -672,10 +686,9 @@ class Plugin:
                 skipped += 1
                 continue
 
-            if omit_stream_id:
-                proxy_url = f"{dispatcharr_url}/proxy/vod/movie/{movie.uuid}"
-            else:
-                proxy_url = f"{dispatcharr_url}/proxy/vod/movie/{movie.uuid}?stream_id={relation.stream_id}"
+            proxy_url = self._build_proxy_url(
+                dispatcharr_url, "movie", movie.uuid, relation.stream_id, omit_stream_id,
+            )
             written = created_strm + refreshed_strm
             log_this = (written + 1) % self.LOG_EVERY == 1 or written < self.LOG_FIRST_N
             verb = "refreshed" if is_existing else "created"
@@ -1099,10 +1112,9 @@ class Plugin:
                     continue
 
                 os.makedirs(season_folder, exist_ok=True)
-                if omit_stream_id:
-                    proxy_url = f"{dispatcharr_url}/proxy/vod/episode/{episode.uuid}"
-                else:
-                    proxy_url = f"{dispatcharr_url}/proxy/vod/episode/{episode.uuid}?stream_id={episode_rel.stream_id}"
+                proxy_url = self._build_proxy_url(
+                    dispatcharr_url, "episode", episode.uuid, episode_rel.stream_id, omit_stream_id,
+                )
                 with open(strm_path, 'w', encoding='utf-8') as f:
                     f.write(proxy_url)
                 if is_existing:

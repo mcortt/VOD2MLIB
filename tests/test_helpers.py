@@ -1236,3 +1236,28 @@ class TestSettingsDriftKeys:
         # changing schedule_cron must NOT count as settings drift
         current = {"batch_size": "250", "schedule_cron": "0 4 * * *"}
         assert p._settings_drift_keys(task, current) == []
+
+
+# ---------- _build_proxy_url (#6 / omit_stream_id) ----------
+
+class TestBuildProxyUrl:
+    def test_movie_includes_stream_id_by_default(self, p):
+        url = p._build_proxy_url("http://d:9191", "movie", "abc-uuid", "615487")
+        assert url == "http://d:9191/proxy/vod/movie/abc-uuid?stream_id=615487"
+
+    def test_episode_includes_stream_id_by_default(self, p):
+        url = p._build_proxy_url("http://d:9191", "episode", "ep-uuid", "42")
+        assert url == "http://d:9191/proxy/vod/episode/ep-uuid?stream_id=42"
+
+    def test_omit_flag_drops_stream_id_movie(self, p):
+        url = p._build_proxy_url("http://d:9191", "movie", "abc-uuid", "615487", omit_stream_id=True)
+        assert url == "http://d:9191/proxy/vod/movie/abc-uuid"
+
+    def test_omit_flag_drops_stream_id_episode(self, p):
+        url = p._build_proxy_url("http://d:9191", "episode", "ep-uuid", "42", omit_stream_id=True)
+        assert url == "http://d:9191/proxy/vod/episode/ep-uuid"
+
+    def test_missing_stream_id_drops_query_even_when_not_omitting(self, p):
+        # No stream_id available -> can't pin, so no dangling "?stream_id=".
+        assert p._build_proxy_url("http://d:9191", "movie", "u", None) == "http://d:9191/proxy/vod/movie/u"
+        assert p._build_proxy_url("http://d:9191", "movie", "u", "") == "http://d:9191/proxy/vod/movie/u"
