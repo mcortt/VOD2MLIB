@@ -9,7 +9,9 @@ import sys
 # Make the repo root importable so `import plugin` resolves to plugin.py.
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import json
 import logging
+import urllib.request
 
 import pytest
 
@@ -1318,3 +1320,190 @@ class TestParseCategoryFilter:
 
     def test_drops_empty_segments(self, p):
         assert p._parse_category_filter("[EN],,, [FR] ,") == ["[EN]", "[FR]"]
+
+
+# ---------- Webhook notifications (v1.17.0) ----------
+
+class TestDetectWebhookFormat:
+    def test_discord_url(self, p):
+        assert p._detect_webhook_format("https://discord.com/api/webhooks/123/abc") == "discord"
+
+    def test_discordapp_legacy_host(self, p):
+        assert p._detect_webhook_format("https://discordapp.com/api/webhooks/123/abc") == "discord"
+
+    def test_slack_url(self, p):
+        assert p._detect_webhook_format("https://hooks.slack.com/services/T00/B00/xyz") == "slack"
+
+    def test_unknown_host_is_generic(self, p):
+        assert p._detect_webhook_format("https://example.com/hook") == "generic"
+
+    def test_empty_url_is_generic(self, p):
+        assert p._detect_webhook_format("") == "generic"
+
+
+class TestWebhookStats:
+    def test_generate_movies_result(self, p):
+        result = {
+            "status": "ok", "message": "ok", "total_in_db": 100, "scanned": 100,
+            "created_strm": 5, "refreshed_strm": 0, "created_nfo": 5,
+            "skipped": 95, "deduped": 0, "errors": 0,
+        }
+        stats, errors, total_changed = p._webhook_stats("generate_movies", result)
+        assert ("Movies added", 5) in stats
+        assert ("Movie NFOs written", 5) in stats
+        assert ("Movies skipped (on disk)", 95) in stats
+        # zero-valued stats are omitted
+        assert not any(label == "Movies refreshed" for label, _ in stats)
+        assert errors == 0
+        # 'skipped' (already on disk) is informational, not a change, and is
+        # excluded from the no-op gate — otherwise a fully-cached rerun would
+        # still "count" as a change because it re-skipped 95 files.
+        assert total_changed == 5 + 5
+
+    def test_cleanup_result(self, p):
+        result = {
+            "status": "ok", "message": "ok",
+            "deleted_strm": 12, "deleted_nfo": 12, "removed_dirs": 3,
+            "preserved_dirs": 1, "errors": 0,
+        }
+        stats, errors, total_changed = p._webhook_stats("cleanup_movies", result)
+        assert ("Folders removed", 3) in stats
+        assert ("Folders preserved (user files)", 1) in stats
+        assert errors == 0
+        # preserved_dirs is informational (nothing was deleted there)
+        assert total_changed == 12 + 12 + 3
+
+    def test_rescan_all_merges_nested_movies_and_series(self, p):
+        result = {
+            "status": "ok", "message": "ok",
+            "movies": {"created_strm": 3, "refreshed_strm": 2, "skipped": 1, "errors": 1},
+            "series": {"episodes_created": 4, "series_processed": 2, "errors": 0},
+        }
+        stats, errors, total_changed = p._webhook_stats("rescan_all", result)
+        assert ("Movies added", 3) in stats
+        assert ("Movies refreshed", 2) in stats
+        assert ("Episodes added", 4) in stats
+        assert ("Series updated", 2) in stats
+        assert errors == 1
+        # movies' 'skipped': 1 is informational, excluded from the gate
+        assert total_changed == 3 + 2 + 4 + 2
+
+    def test_all_zero_gives_no_stats_and_no_errors(self, p):
+        result = {"status": "ok", "message": "nothing to do", "created_strm": 0, "skipped": 0, "errors": 0}
+        stats, errors, total_changed = p._webhook_stats("generate_movies", result)
+        assert stats == []
+        assert errors == 0
+        assert total_changed == 0
+
+    def test_fully_cached_rerun_is_a_no_op_despite_large_scan_counts(self, p):
+        # A nightly cron rerun where every movie is already on disk still
+        # reports a large 'total_in_db'/'scanned' — those must NOT make the
+        # run look like it "changed" something, or webhook_notify_on_no_changes
+        # would never actually suppress anything.
+        result = {
+            "status": "ok", "message": "already done", "total_in_db": 5000, "scanned": 5000,
+            "created_strm": 0, "refreshed_strm": 0, "created_nfo": 0, "skipped": 5000, "errors": 0,
+        }
+        stats, errors, total_changed = p._webhook_stats("generate_movies", result)
+        assert total_changed == 0
+        assert errors == 0
+
+
+class TestWebhookPayloads:
+    def test_discord_payload_shape(self, p):
+        payload = p._discord_webhook_payload("Title", "msg", [("Movies added", 3)], 0)
+        embed = payload["embeds"][0]
+        assert embed["title"] == "Title"
+        assert embed["description"] == "msg"
+        assert embed["fields"] == [{"name": "Movies added", "value": "3", "inline": True}]
+        assert embed["color"] != 0xE74C3C  # not error-red when errors == 0
+
+    def test_discord_payload_uses_red_on_errors(self, p):
+        payload = p._discord_webhook_payload("Title", "msg", [], 2)
+        assert payload["embeds"][0]["color"] == 0xE74C3C
+        assert {"name": "Errors", "value": "2", "inline": True} in payload["embeds"][0]["fields"]
+
+    def test_slack_payload_is_plain_text(self, p):
+        payload = p._slack_webhook_payload("Title", "msg", [("Movies added", 3)], 0)
+        assert "Title" in payload["text"]
+        assert "msg" in payload["text"]
+        assert "Movies added: 3" in payload["text"]
+
+    def test_generic_payload_shape(self, p):
+        payload = p._generic_webhook_payload("generate_movies", "Title", "msg", [("Movies added", 3)], 0)
+        assert payload["action"] == "generate_movies"
+        assert payload["stats"] == {"Movies added": 3}
+        assert payload["errors"] == 0
+
+
+class TestSendWebhook:
+    def test_no_url_skips_network_call(self, p, monkeypatch):
+        called = []
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: called.append(1))
+        p._send_webhook({"webhook_url": ""}, CapturingLogger(), "generate_movies", {"status": "ok", "created_strm": 5})
+        assert called == []
+
+    def test_error_result_skips_network_call(self, p, monkeypatch):
+        called = []
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: called.append(1))
+        p._send_webhook(
+            {"webhook_url": "https://example.com/hook"}, CapturingLogger(),
+            "generate_movies", {"status": "error", "message": "boom"},
+        )
+        assert called == []
+
+    def test_no_changes_skips_by_default(self, p, monkeypatch):
+        called = []
+        monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: called.append(1))
+        p._send_webhook(
+            {"webhook_url": "https://example.com/hook"}, CapturingLogger(),
+            "generate_movies", {"status": "ok", "created_strm": 0, "skipped": 0, "errors": 0},
+        )
+        assert called == []
+
+    def test_no_changes_sent_when_opted_in(self, p, monkeypatch):
+        class FakeResp:
+            status = 204
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        captured = {}
+        def fake_urlopen(req, timeout=None):
+            captured["url"] = req.full_url
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            return FakeResp()
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        p._send_webhook(
+            {"webhook_url": "https://example.com/hook", "webhook_notify_on_no_changes": True},
+            CapturingLogger(), "generate_movies", {"status": "ok", "created_strm": 0, "skipped": 0, "errors": 0},
+        )
+        assert captured["url"] == "https://example.com/hook"
+        assert captured["body"]["action"] == "generate_movies"
+
+    def test_posts_discord_payload_for_discord_url(self, p, monkeypatch):
+        class FakeResp:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        captured = {}
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode("utf-8"))
+            captured["content_type"] = req.get_header("Content-type")
+            return FakeResp()
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        p._send_webhook(
+            {"webhook_url": "https://discord.com/api/webhooks/1/abc"}, CapturingLogger(),
+            "generate_movies", {"status": "ok", "message": "Wrote 5 new .strm files", "created_strm": 5, "errors": 0},
+        )
+        assert "embeds" in captured["body"]
+        assert captured["content_type"] == "application/json"
+
+    def test_webhook_failure_is_logged_not_raised(self, p, monkeypatch):
+        def raising_urlopen(*a, **k):
+            raise OSError("network unreachable")
+        monkeypatch.setattr(urllib.request, "urlopen", raising_urlopen)
+        logger = CapturingLogger()
+        p._send_webhook(
+            {"webhook_url": "https://example.com/hook"}, logger,
+            "generate_movies", {"status": "ok", "created_strm": 5, "errors": 0},
+        )
+        assert any("Webhook delivery failed" in w for w in logger.warnings)

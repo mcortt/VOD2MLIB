@@ -14,13 +14,15 @@ This fork:  https://github.com/R3XCHRIS/VOD2MLIB
 """
 import os
 import re
+import json
+import urllib.request
 from typing import Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class Plugin:
     """Generate .strm files for VOD movies from Dispatcharr."""
-    
+
     name = "VOD to Media Library"
     version = "1.16.0"
     help_url = "https://github.com/R3XCHRIS/VOD2MLIB#readme"
@@ -46,6 +48,48 @@ class Plugin:
 
     # File suffixes the plugin writes (used by cleanup and skip logic)
     _PLUGIN_FILE_SUFFIXES = ('.strm', '.nfo')
+
+    # Actions that mutate the library (and so are worth a webhook) mapped to a
+    # human title. scan_all_vods is read-only and deliberately excluded, as
+    # are the schedule-management actions (apply/remove/status/test-fire —
+    # the latter only enqueues; the resulting rescan_all fires its own event).
+    _WEBHOOK_ACTION_LABELS = {
+        "generate_movies": "Generate Movies",
+        "generate_series": "Generate Series",
+        "rescan_all": "Full Rescan",
+        "cleanup_movies": "Clean up Movies",
+        "cleanup_series": "Clean up Series",
+    }
+
+    # (result dict key, display label) for webhook summaries, in display order.
+    # Only keys present with a nonzero value in a given action's result end up
+    # in the notification — this list is a superset across all notify-worthy
+    # actions.
+    _WEBHOOK_STAT_LABELS = [
+        ("created_strm", "Movies added"),
+        ("refreshed_strm", "Movies refreshed"),
+        ("created_nfo", "Movie NFOs written"),
+        ("skipped", "Movies skipped (on disk)"),
+        ("series_processed", "Series updated"),
+        ("series_uptodate", "Series up to date"),
+        ("episodes_created", "Episodes added"),
+        ("episodes_refreshed", "Episodes refreshed"),
+        ("nfo_created", "Series NFOs written"),
+        ("deduped", "Duplicates deduped"),
+        ("deleted_strm", ".strm files deleted"),
+        ("deleted_nfo", ".nfo files deleted"),
+        ("removed_dirs", "Folders removed"),
+        ("preserved_dirs", "Folders preserved (user files)"),
+    ]
+
+    # Subset of the above that represents an actual write/delete (as opposed
+    # to informational counts like 'already on disk' or 'already up to date').
+    # Used to decide whether a run was a no-op for webhook_notify_on_no_changes.
+    _WEBHOOK_CHANGE_KEYS = {
+        "created_strm", "refreshed_strm", "created_nfo",
+        "series_processed", "episodes_created", "episodes_refreshed", "nfo_created",
+        "deduped", "deleted_strm", "deleted_nfo", "removed_dirs",
+    }
 
     # Language / provider tag prefixes stripped from titles and category names.
     # Handles the formats providers actually use, each guarded against eating
@@ -248,6 +292,40 @@ class Plugin:
             "help_text": "When `Nest Series by Category` is ON and a series is tagged with multiple categories upstream, write the series folder + episodes under the first category only (alphabetical by category name) instead of duplicating across all of them. No effect when `Nest Series by Category` is OFF. ⚠ MIGRATION: changing this on an already-generated library does NOT remove the old duplicate folders — run `[⚠ DANGER] Clean up Series` once, then re-generate, to clean them up."
         },
         {
+            "id": "_section_notifications",
+            "label": "[NOTIFICATIONS]",
+            "type": "info",
+            "description": "Optional webhook posted after Generate Movies/Series, Full rescan, and Clean up actions, summarising what was added, refreshed, skipped, or deleted. Not sent for the read-only Scan action.",
+        },
+        {
+            "id": "webhook_url",
+            "label": "Webhook URL",
+            "type": "string",
+            "default": "",
+            "placeholder": "https://discord.com/api/webhooks/... or https://hooks.slack.com/services/...",
+            "help_text": "Leave empty to disable notifications. Paste a Discord or Slack incoming-webhook URL — the format below auto-detects from the URL. Any other URL receives a generic JSON payload, useful for ntfy, Gotify, n8n, or a custom relay."
+        },
+        {
+            "id": "webhook_format",
+            "label": "Webhook Format",
+            "type": "select",
+            "default": "auto",
+            "options": [
+                {"value": "auto", "label": "Auto-detect from URL"},
+                {"value": "discord", "label": "Discord"},
+                {"value": "slack", "label": "Slack"},
+                {"value": "generic", "label": "Generic JSON"}
+            ],
+            "help_text": "Override auto-detection if you're proxying the webhook through something that changes the URL shape (e.g. a relay or tunnel)."
+        },
+        {
+            "id": "webhook_notify_on_no_changes",
+            "label": "Notify Even When Nothing Changed",
+            "type": "boolean",
+            "default": False,
+            "help_text": "OFF (default): skip the webhook when a run adds/refreshes/deletes nothing and hits no errors — keeps nightly no-op cron rescans quiet. ON: send a notification after every run regardless."
+        },
+        {
             "id": "_section_schedule",
             "label": "[AUTO-RESCAN SCHEDULE]",
             "type": "info",
@@ -402,27 +480,35 @@ class Plugin:
         logger.info("=" * 60)
         
         if action == "scan_all_vods":
-            return self._scan_all_vods(settings, logger)
+            result = self._scan_all_vods(settings, logger)
         elif action == "generate_movies":
-            return self._generate_movies(settings, logger)
+            result = self._generate_movies(settings, logger)
         elif action == "generate_series":
-            return self._generate_series(settings, logger)
+            result = self._generate_series(settings, logger)
         elif action == "cleanup_movies":
-            return self._cleanup_movies(settings, logger)
+            result = self._cleanup_movies(settings, logger)
         elif action == "cleanup_series":
-            return self._cleanup_series(settings, logger)
+            result = self._cleanup_series(settings, logger)
         elif action == "rescan_all":
-            return self._rescan_all(settings, logger)
+            result = self._rescan_all(settings, logger)
         elif action == "apply_schedule":
-            return self._apply_schedule(settings, logger)
+            result = self._apply_schedule(settings, logger)
         elif action == "remove_schedule":
-            return self._remove_schedule(settings, logger)
+            result = self._remove_schedule(settings, logger)
         elif action == "schedule_status":
-            return self._schedule_status(settings, logger)
+            result = self._schedule_status(settings, logger)
         elif action == "schedule_test_fire":
-            return self._schedule_test_fire(settings, logger)
+            result = self._schedule_test_fire(settings, logger)
+        else:
+            return {"status": "error", "message": f"Unknown action: {action}"}
 
-        return {"status": "error", "message": f"Unknown action: {action}"}
+        if action in self._WEBHOOK_ACTION_LABELS:
+            try:
+                self._send_webhook(settings, logger, action, result)
+            except Exception as e:
+                logger.warning("Webhook dispatch failed: %s", e)
+
+        return result
     
     def _scan_all_vods(self, settings: Dict[str, Any], logger):
         """Scan and show total movies and series available."""
@@ -1357,6 +1443,108 @@ class Plugin:
         else:
             host_masked = '<host>'
         return scheme + host_masked + path
+
+    def _detect_webhook_format(self, url: str) -> str:
+        """Infer Discord/Slack/generic from a webhook URL's host+path shape."""
+        u = (url or "").lower()
+        if "discord.com/api/webhooks" in u or "discordapp.com/api/webhooks" in u:
+            return "discord"
+        if "hooks.slack.com" in u:
+            return "slack"
+        return "generic"
+
+    def _webhook_stats(self, action: str, result: Dict[str, Any]):
+        """Flatten an action's result dict into (stats, errors, total_changed).
+
+        rescan_all nests its movie/series results under 'movies'/'series' keys
+        (see _rescan_all); every other notify-worthy action reports counts at
+        the top level. total_changed only counts real writes/deletes (see
+        _WEBHOOK_CHANGE_KEYS) and is used to decide whether a no-op run should
+        be suppressed.
+        """
+        if action == "rescan_all":
+            counts: Dict[str, int] = {}
+            for sub in (result.get("movies"), result.get("series")):
+                if isinstance(sub, dict):
+                    for k, v in sub.items():
+                        if isinstance(v, int) and not isinstance(v, bool):
+                            counts[k] = counts.get(k, 0) + v
+        else:
+            counts = {
+                k: v for k, v in result.items()
+                if isinstance(v, int) and not isinstance(v, bool)
+            }
+
+        errors = counts.get("errors", 0)
+        stats = [(label, counts[key]) for key, label in self._WEBHOOK_STAT_LABELS if counts.get(key)]
+        total_changed = sum(v for k, v in counts.items() if k in self._WEBHOOK_CHANGE_KEYS)
+        return stats, errors, total_changed
+
+    def _discord_webhook_payload(self, title: str, message: str, stats, errors: int) -> Dict[str, Any]:
+        color = 0xE74C3C if errors else (0x2ECC71 if stats else 0x95A5A6)
+        fields = [{"name": label, "value": str(value), "inline": True} for label, value in stats]
+        if errors:
+            fields.append({"name": "Errors", "value": str(errors), "inline": True})
+        return {"embeds": [{"title": title, "description": message, "color": color, "fields": fields}]}
+
+    def _slack_webhook_payload(self, title: str, message: str, stats, errors: int) -> Dict[str, Any]:
+        lines = [f"*{title}*"]
+        if message:
+            lines.append(message)
+        lines.extend(f"• {label}: {value}" for label, value in stats)
+        if errors:
+            lines.append(f"• Errors: {errors}")
+        return {"text": "\n".join(lines)}
+
+    def _generic_webhook_payload(self, action: str, title: str, message: str, stats, errors: int) -> Dict[str, Any]:
+        return {
+            "plugin": "vod2mlib",
+            "action": action,
+            "title": title,
+            "message": message,
+            "stats": {label: value for label, value in stats},
+            "errors": errors,
+        }
+
+    def _send_webhook(self, settings: Dict[str, Any], logger, action: str, result: Dict[str, Any]) -> None:
+        """POST a run summary to the configured webhook, if any.
+
+        Best-effort and silent on failure (beyond a log line) — a bad or
+        unreachable webhook URL must never fail the underlying Generate /
+        Rescan / Clean up action that already completed successfully.
+        """
+        url = (settings.get("webhook_url") or "").strip()
+        if not url or not isinstance(result, dict) or result.get("status") == "error":
+            return
+
+        stats, errors, total_changed = self._webhook_stats(action, result)
+        if not settings.get("webhook_notify_on_no_changes", False) and total_changed == 0 and not errors:
+            return
+
+        fmt = settings.get("webhook_format") or "auto"
+        if fmt == "auto":
+            fmt = self._detect_webhook_format(url)
+
+        title = f"VOD2MLIB — {self._WEBHOOK_ACTION_LABELS.get(action, action)}"
+        message = result.get("message", "")
+
+        if fmt == "discord":
+            payload = self._discord_webhook_payload(title, message, stats, errors)
+        elif fmt == "slack":
+            payload = self._slack_webhook_payload(title, message, stats, errors)
+        else:
+            payload = self._generic_webhook_payload(action, title, message, stats, errors)
+
+        try:
+            body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                url, data=body, headers={"Content-Type": "application/json"}, method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status >= 300:
+                    logger.warning("Webhook returned HTTP %s", resp.status)
+        except Exception as e:
+            logger.warning("Webhook delivery failed: %s", e)
 
     def _cleanup_movies(self, settings: Dict[str, Any], logger):
         """Delete plugin-generated .strm and .nfo files under the movies root.
