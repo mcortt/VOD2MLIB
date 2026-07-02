@@ -7,7 +7,7 @@
 <p align="center">A Dispatcharr plugin that turns your VOD catalogue into a folder of <code>.strm</code> files (with optional NFO metadata) that media servers — Jellyfin, Emby, Kodi, ChannelsDVR — can index and play.</p>
 
 <p align="center">
-  <i>v1.15.2 — slug <code>vod2mlib</code></i>
+  <i>v1.16.0 — slug <code>vod2mlib</code></i>
 </p>
 
 > **Note on scheduled rescans.** The cron task routes via Dispatcharr's `dvr` Celery worker as a workaround for an upstream plugin-task-registration issue affecting the default prefork worker pool ([Dispatcharr#1244](https://github.com/Dispatcharr/Dispatcharr/issues/1244)). The routing is transparent — no user action required for new installs. If you originally set up your schedule on **v1.14.1 or earlier**, click `[SCHEDULE] Apply / Update` once after upgrading so the stored task picks up the new routing.
@@ -113,7 +113,7 @@ The `Dispatcharr URL` in plugin settings is **baked into every `.strm` file** �
 
 ## Settings
 
-The Settings tab is grouped into four sections:
+The Settings tab is grouped into five sections:
 
 | Section | Field | What it does |
 |---|---|---|
@@ -129,9 +129,22 @@ The Settings tab is grouped into four sections:
 |  | Refresh Existing Series | Re-evaluate already-processed series for new episodes AND rewrite existing episode `.strm` URLs (cron-friendly). Preserves `tvshow.nfo` and episode `.nfo` edits. |
 |  | Nest Series by Category | Wrap each series folder inside a subfolder named by its M3U category (off by default; series without a category go to `Unassigned/`) |
 |  | Dedupe Series Across Categories | When nesting is ON and a series is tagged with multiple categories upstream, write under the first category only (alphabetical) instead of duplicating. No effect when nesting is OFF. Off by default. ⚠ Doesn't remove existing duplicate folders — `[⚠ DANGER] Clean up` + re-generate to migrate. |
+| **Notifications** | Webhook URL | Discord/Slack incoming-webhook URL, or any endpoint for a generic JSON payload. Empty = disabled. |
+|  | Webhook Format | `Auto-detect` (default), or force `Discord` / `Slack` / `Generic JSON` |
+|  | Notify Even When Nothing Changed | Off by default — a run that adds/refreshes/deletes nothing (and hits no errors) is silently skipped, so nightly no-op cron rescans don't spam the channel |
 | **Auto-rescan schedule** | Schedule (cron) | Standard 5-field expression. Default `0 3 * * *` (daily 03:00) |
 |  | Schedule Timezone | IANA timezone the cron is interpreted in (e.g. `Europe/London`). Empty = UTC. Handles DST automatically. |
 |  | Scheduled Action | What the cron fires (full rescan recommended) |
+
+## Webhook notifications
+
+Every `[GENERATE]` action, `[GENERATE] Full rescan`, and `[⚠ DANGER] Clean up` already tracks exactly what it did — movies/episodes added, refreshed, skipped (already on disk), deduped, or deleted, plus an error count — and prints it to the run log. Setting a **Webhook URL** sends that same summary to Discord, Slack, or any other endpoint as JSON, right after the action finishes (including cron-triggered rescans, not just manual clicks).
+
+- **Discord** — paste a channel's incoming-webhook URL (`Server Settings → Integrations → Webhooks`). Posts a rich embed with a colored sidebar (green = changes made, red = errors, gray = no-op) and one field per stat.
+- **Slack** — paste an incoming-webhook URL (`api.slack.com/messaging/webhooks`). Posts a plain-text message listing the same stats.
+- **Anything else** — posts `{"plugin": "vod2mlib", "action": ..., "title": ..., "message": ..., "stats": {...}, "errors": ...}` as generic JSON, so you can point it at ntfy, Gotify, Home Assistant, n8n, or your own relay.
+
+Read-only actions (`Scan`, `Show status`, `Apply/Remove schedule`) never fire a webhook. By default a run that made zero changes is skipped too — turn on **Notify Even When Nothing Changed** if you want a heartbeat on every tick regardless. Delivery is best-effort: a failed or unreachable webhook is logged as a warning and never fails the underlying Generate/Rescan/Clean up action.
 
 ## Workflow
 

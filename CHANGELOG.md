@@ -1,5 +1,17 @@
 # Changelog
 
+## v1.16.0 — webhook notifications (Discord / Slack / generic JSON)
+
+Every Generate/Rescan/Clean up action already tracked exactly what it did — created, refreshed, skipped, deduped, and deleted counts, plus errors — and logged it as a run summary. That data now optionally goes out as a webhook too, so you don't have to check the run log to know what a nightly cron rescan did.
+
+- **New `[NOTIFICATIONS]` settings section** with a `Webhook URL` field. Leave it empty (default) to keep current behaviour exactly as-is.
+- **Format auto-detection.** A Discord (`discord.com/api/webhooks/...`) or Slack (`hooks.slack.com/...`) URL is detected automatically and posted as a rich embed / plain-text message respectively. Any other URL gets a generic JSON payload (`{"plugin": "vod2mlib", "action": ..., "stats": {...}, "errors": ...}`) for ntfy, Gotify, Home Assistant, n8n, or a custom relay. `Webhook Format` can force a specific one if you're proxying through something that changes the URL shape.
+- **Fires after** `[GENERATE] Movies`, `[GENERATE] Series`, `[GENERATE] Full rescan`, `[⚠ DANGER] Clean up Movies`, and `[⚠ DANGER] Clean up Series` — both manual clicks and cron-triggered runs (it hooks into the shared `run()` dispatcher, so scheduled rescans notify the same way as a button click). Read-only actions (`Scan`, `Show status`, schedule management) never notify.
+- **Quiet by default on no-ops.** A run that adds/refreshes/deletes nothing and hits no errors is skipped — informational counts like "already on disk" or "already up to date" don't count as a change, so a fully-cached nightly rescan of a 5,000-title library stays silent instead of pinging every night. Turn on `Notify Even When Nothing Changed` for a heartbeat on every tick instead.
+- **Best-effort delivery.** A bad URL, timeout, or non-2xx response is logged as a warning; it never fails the underlying action, which has already completed by the time the webhook fires.
+
+25 new unit tests (185 total, was 165) covering format detection, stat flattening (including the nested `movies`/`series` shape `rescan_all` returns), payload construction for all three formats, and delivery/failure handling.
+
 ## v1.15.2 — active-account filter, bare-year cleanup, schedule-drift warning
 
 Four community-reported fixes, all backwards-compatible.

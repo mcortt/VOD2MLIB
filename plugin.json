@@ -1,7 +1,7 @@
 {
   "name": "VOD to Media Library",
-  "version": "1.15.2",
-  "description": "VOD → media library bridge. Generates .strm + NFO files from Dispatcharr's VOD catalogue, with optional cron-driven auto-rescan that picks up newly-added episodes.",
+  "version": "1.16.0",
+  "description": "VOD → media library bridge. Generates .strm + NFO files from Dispatcharr's VOD catalogue, with optional cron-driven auto-rescan that picks up newly-added episodes, and optional Discord/Slack/generic webhook notifications summarising what changed.",
   "author": "R3XCHRIS",
   "license": "MIT",
   "min_dispatcharr_version": "v0.24.0",
@@ -139,6 +139,40 @@
       "type": "boolean",
       "default": false,
       "help_text": "When `Nest Series by Category` is ON and a series is tagged with multiple categories upstream, write the series folder + episodes under the first category only (alphabetical by category name) instead of duplicating across all of them. No effect when `Nest Series by Category` is OFF. ⚠ MIGRATION: changing this on an already-generated library does NOT remove the old duplicate folders — run `[⚠ DANGER] Clean up Series` once, then re-generate, to clean them up."
+    },
+    {
+      "id": "_section_notifications",
+      "label": "[NOTIFICATIONS]",
+      "type": "info",
+      "description": "Optional webhook posted after Generate Movies/Series, Full rescan, and Clean up actions, summarising what was added, refreshed, skipped, or deleted. Not sent for the read-only Scan action."
+    },
+    {
+      "id": "webhook_url",
+      "label": "Webhook URL",
+      "type": "string",
+      "default": "",
+      "placeholder": "https://discord.com/api/webhooks/... or https://hooks.slack.com/services/...",
+      "help_text": "Leave empty to disable notifications. Paste a Discord or Slack incoming-webhook URL — the format below auto-detects from the URL. Any other URL receives a generic JSON payload, useful for ntfy, Gotify, n8n, or a custom relay."
+    },
+    {
+      "id": "webhook_format",
+      "label": "Webhook Format",
+      "type": "select",
+      "default": "auto",
+      "options": [
+        {"value": "auto", "label": "Auto-detect from URL"},
+        {"value": "discord", "label": "Discord"},
+        {"value": "slack", "label": "Slack"},
+        {"value": "generic", "label": "Generic JSON"}
+      ],
+      "help_text": "Override auto-detection if you're proxying the webhook through something that changes the URL shape (e.g. a relay or tunnel)."
+    },
+    {
+      "id": "webhook_notify_on_no_changes",
+      "label": "Notify Even When Nothing Changed",
+      "type": "boolean",
+      "default": false,
+      "help_text": "OFF (default): skip the webhook when a run adds/refreshes/deletes nothing and hits no errors — keeps nightly no-op cron rescans quiet. ON: send a notification after every run regardless."
     },
     {
       "id": "_section_schedule",
