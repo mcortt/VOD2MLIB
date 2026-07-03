@@ -15,6 +15,7 @@ This fork:  https://github.com/R3XCHRIS/VOD2MLIB
 import os
 import re
 import json
+import urllib.error
 import urllib.request
 from typing import Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -1538,11 +1539,31 @@ class Plugin:
         try:
             body = json.dumps(payload).encode("utf-8")
             req = urllib.request.Request(
-                url, data=body, headers={"Content-Type": "application/json"}, method="POST",
+                url,
+                data=body,
+                headers={
+                    "Content-Type": "application/json",
+                    # Discord/Slack sit behind WAFs (Cloudflare et al.) that
+                    # block urllib's default "Python-urllib/x.y" User-Agent as
+                    # a known bot signature, returning a bare 403 with no other
+                    # indication anything is wrong with the request itself.
+                    "User-Agent": "VOD2MLIB-Webhook/1.0 (+https://github.com/R3XCHRIS/VOD2MLIB)",
+                },
+                method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
                 if resp.status >= 300:
                     logger.warning("Webhook returned HTTP %s", resp.status)
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", "replace")[:300]
+            except Exception:
+                pass
+            logger.warning(
+                "Webhook delivery failed: HTTP %s %s%s",
+                e.code, e.reason, f" — {detail}" if detail else "",
+            )
         except Exception as e:
             logger.warning("Webhook delivery failed: %s", e)
 
