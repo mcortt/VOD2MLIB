@@ -9,8 +9,10 @@ import sys
 # Make the repo root importable so `import plugin` resolves to plugin.py.
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import io
 import json
 import logging
+import urllib.error
 import urllib.request
 
 import pytest
@@ -26,14 +28,25 @@ class CapturingLogger:
         self.errors = []
         self.infos = []
 
+    @staticmethod
+    def _render(args):
+        if not args:
+            return ""
+        if len(args) > 1:
+            try:
+                return args[0] % args[1:]
+            except Exception:
+                pass
+        return args[0]
+
     def warning(self, *args, **kwargs):
-        self.warnings.append(args[0] if args else "")
+        self.warnings.append(self._render(args))
 
     def error(self, *args, **kwargs):
-        self.errors.append(args[0] if args else "")
+        self.errors.append(self._render(args))
 
     def info(self, *args, **kwargs):
-        self.infos.append(args[0] if args else "")
+        self.infos.append(self._render(args))
 
 
 @pytest.fixture
@@ -1507,3 +1520,43 @@ class TestSendWebhook:
             "generate_movies", {"status": "ok", "created_strm": 5, "errors": 0},
         )
         assert any("Webhook delivery failed" in w for w in logger.warnings)
+
+    def test_http_error_body_surfaced_in_log(self, p, monkeypatch):
+        # Discord/Slack sit behind WAFs that return a bare 403 with no other
+        # signal — surfacing code + reason + response body is the difference
+        # between "something's wrong" and "here's exactly why".
+        def raising_urlopen(*a, **k):
+            raise urllib.error.HTTPError(
+                "https://discord.com/api/webhooks/1/abc", 403, "Forbidden", None,
+                io.BytesIO(b"Cloudflare blocked this request"),
+            )
+        monkeypatch.setattr(urllib.request, "urlopen", raising_urlopen)
+        logger = CapturingLogger()
+        p._send_webhook(
+            {"webhook_url": "https://discord.com/api/webhooks/1/abc"}, logger,
+            "generate_movies", {"status": "ok", "created_strm": 5, "errors": 0},
+        )
+        assert len(logger.warnings) == 1
+        assert "403" in logger.warnings[0]
+        assert "Forbidden" in logger.warnings[0]
+        assert "Cloudflare blocked this request" in logger.warnings[0]
+
+    def test_sets_custom_user_agent(self, p, monkeypatch):
+        # urllib's default "Python-urllib/x.y" User-Agent is a known bot
+        # signature that Cloudflare (in front of discord.com) blocks with a
+        # bare 403 — this is the actual fix, not just an error-message nicety.
+        class FakeResp:
+            status = 200
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        captured = {}
+        def fake_urlopen(req, timeout=None):
+            captured["user_agent"] = req.get_header("User-agent")
+            return FakeResp()
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        p._send_webhook(
+            {"webhook_url": "https://discord.com/api/webhooks/1/abc"}, CapturingLogger(),
+            "generate_movies", {"status": "ok", "created_strm": 5, "errors": 0},
+        )
+        assert captured["user_agent"]
+        assert "python-urllib" not in captured["user_agent"].lower()
