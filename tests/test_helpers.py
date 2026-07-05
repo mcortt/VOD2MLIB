@@ -1560,3 +1560,176 @@ class TestSendWebhook:
         )
         assert captured["user_agent"]
         assert "python-urllib" not in captured["user_agent"].lower()
+
+
+# ---------- _dir_has_plugin_files (orphan-prune guardrail) ----------
+
+class TestDirHasPluginFiles:
+    def test_empty_dir_is_false(self, p, tmp_path):
+        assert p._dir_has_plugin_files(str(tmp_path)) is False
+
+    def test_nonexistent_is_false(self, p, tmp_path):
+        assert p._dir_has_plugin_files(str(tmp_path / "nope")) is False
+
+    def test_finds_nested_strm(self, p, tmp_path):
+        d = tmp_path / "Movie (2020)"
+        d.mkdir()
+        (d / "Movie (2020).strm").write_text("x")
+        assert p._dir_has_plugin_files(str(tmp_path)) is True
+
+    def test_finds_nested_nfo(self, p, tmp_path):
+        d = tmp_path / "Movie (2020)"
+        d.mkdir()
+        (d / "Movie (2020).nfo").write_text("<movie/>")
+        assert p._dir_has_plugin_files(str(tmp_path)) is True
+
+    def test_user_files_only_is_false(self, p, tmp_path):
+        d = tmp_path / "Movie (2020)"
+        d.mkdir()
+        (d / "poster.jpg").write_text("x")
+        (d / "Movie (2020).en.srt").write_text("subs")
+        assert p._dir_has_plugin_files(str(tmp_path)) is False
+
+
+# ---------- _prune_orphans_under (differential cleanup) ----------
+
+class TestPruneOrphansUnder:
+    """Tests _prune_orphans_under against real temp dirs (no DB).
+
+    The keep-set is a set of realpaths, built here by hand exactly as the
+    collectors would. Only files NOT in the set (and not under a protected
+    subtree) should be removed; user files survive and empty dirs are cleaned
+    bottom-up. Sanitisation lives in the collectors, so these tests are
+    sanitisation-agnostic on purpose — they compare realpaths directly.
+    """
+
+    def _mk(self, path, text="http://x"):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return os.path.realpath(str(path))
+
+    def test_orphan_deleted_kept_preserved(self, p, tmp_path):
+        log = CapturingLogger()
+        keep_strm = self._mk(tmp_path / "Kept (2020)" / "Kept (2020).strm")
+        keep_nfo = self._mk(tmp_path / "Kept (2020)" / "Kept (2020).nfo", "<movie/>")
+        # Orphaned movie folder — neither file in the keep set.
+        self._mk(tmp_path / "Gone (2019)" / "Gone (2019).strm")
+        self._mk(tmp_path / "Gone (2019)" / "Gone (2019).nfo", "<movie/>")
+
+        r = p._prune_orphans_under(str(tmp_path), {keep_strm, keep_nfo}, set(), log)
+
+        assert r["deleted_strm"] == 1
+        assert r["deleted_nfo"] == 1
+        assert r["removed_dirs"] == 1  # the Gone folder
+        assert (tmp_path / "Kept (2020)" / "Kept (2020).strm").exists()
+        assert (tmp_path / "Kept (2020)" / "Kept (2020).nfo").exists()
+        assert not (tmp_path / "Gone (2019)").exists()
+        assert tmp_path.exists()  # root preserved
+
+    def test_kept_nfo_survives(self, p, tmp_path):
+        # Collectors always add both the .strm and its sidecar .nfo, so a valid
+        # NFO next to a kept movie must never be treated as an orphan.
+        log = CapturingLogger()
+        strm = self._mk(tmp_path / "Kept (2020)" / "Kept (2020).strm")
+        nfo = self._mk(tmp_path / "Kept (2020)" / "Kept (2020).nfo", "<movie/>")
+        r = p._prune_orphans_under(str(tmp_path), {strm, nfo}, set(), log)
+        assert r["deleted_nfo"] == 0
+        assert (tmp_path / "Kept (2020)" / "Kept (2020).nfo").exists()
+
+    def test_user_files_preserved(self, p, tmp_path):
+        log = CapturingLogger()
+        # Orphaned .strm sharing a folder with a user-added poster.
+        self._mk(tmp_path / "Gone (2019)" / "Gone (2019).strm")
+        poster = tmp_path / "Gone (2019)" / "poster.jpg"
+        poster.write_text("img")
+        r = p._prune_orphans_under(str(tmp_path), set(), set(), log)
+        assert r["deleted_strm"] == 1
+        assert r["removed_dirs"] == 0  # folder kept — poster still inside
+        assert r["preserved_dirs"] >= 1
+        assert poster.exists()
+
+    def test_protected_subtree_untouched(self, p, tmp_path):
+        log = CapturingLogger()
+        protected_dir = tmp_path / "MysterySeries (2021)"
+        # Episode not in keep set, but under a protected series folder.
+        self._mk(protected_dir / "Season 01" / "MysterySeries - S01E01.strm")
+        r = p._prune_orphans_under(
+            str(tmp_path), set(), {os.path.realpath(str(protected_dir))}, log,
+        )
+        assert r["deleted_strm"] == 0
+        assert r["protected_files"] == 1
+        assert (protected_dir / "Season 01" / "MysterySeries - S01E01.strm").exists()
+
+    def test_protected_prefix_does_not_match_sibling(self, p, tmp_path):
+        # A protected 'Show' folder must not accidentally protect 'Show 2'.
+        log = CapturingLogger()
+        protected_dir = tmp_path / "Show"
+        self._mk(protected_dir / "keep.strm")
+        self._mk(tmp_path / "Show 2" / "orphan.strm")
+        r = p._prune_orphans_under(
+            str(tmp_path), set(), {os.path.realpath(str(protected_dir))}, log,
+        )
+        assert r["deleted_strm"] == 1  # only Show 2's orphan
+        assert (protected_dir / "keep.strm").exists()
+        assert not (tmp_path / "Show 2").exists()
+
+    def test_series_episode_prune_keeps_current_removes_dropped(self, p, tmp_path):
+        log = CapturingLogger()
+        series = tmp_path / "Show (2020)"
+        keep_ep = self._mk(series / "Season 01" / "Show - S01E01.strm")
+        keep_epnfo = self._mk(series / "Season 01" / "Show - S01E01.nfo", "<ep/>")
+        keep_tv = self._mk(series / "tvshow.nfo", "<tvshow/>")
+        # Dropped episode — no longer upstream.
+        self._mk(series / "Season 01" / "Show - S01E99.strm")
+        keep = {keep_ep, keep_epnfo, keep_tv}
+        r = p._prune_orphans_under(str(tmp_path), keep, set(), log)
+        assert r["deleted_strm"] == 1
+        assert (series / "Season 01" / "Show - S01E01.strm").exists()
+        assert (series / "tvshow.nfo").exists()
+        assert not (series / "Season 01" / "Show - S01E99.strm").exists()
+
+    def test_empty_season_folder_removed(self, p, tmp_path):
+        log = CapturingLogger()
+        series = tmp_path / "Show (2020)"
+        self._mk(series / "tvshow.nfo", "<tvshow/>")
+        # A whole season went away.
+        self._mk(series / "Season 05" / "Show - S05E01.strm")
+        keep = {os.path.realpath(str(series / "tvshow.nfo"))}
+        r = p._prune_orphans_under(str(tmp_path), keep, set(), log)
+        assert r["deleted_strm"] == 1
+        assert not (series / "Season 05").exists()
+        assert (series / "tvshow.nfo").exists()  # series folder itself preserved
+
+    def test_nonexistent_root_no_error(self, p, tmp_path):
+        log = CapturingLogger()
+        r = p._prune_orphans_under(str(tmp_path / "nope"), set(), set(), log)
+        assert r["errors"] == 0
+        assert r["deleted_strm"] == 0
+
+    def test_root_never_removed_even_when_emptied(self, p, tmp_path):
+        log = CapturingLogger()
+        self._mk(tmp_path / "Gone (2019)" / "Gone (2019).strm")
+        r = p._prune_orphans_under(str(tmp_path), set(), set(), log)
+        assert tmp_path.exists()
+        assert r["removed_dirs"] == 1  # only the Gone folder, not the root
+
+
+# ---------- prune action wiring ----------
+
+class TestPruneActionsWebhookRegistered:
+    def test_prune_actions_are_notify_worthy(self, p):
+        assert "prune_movies" in p._WEBHOOK_ACTION_LABELS
+        assert "prune_series" in p._WEBHOOK_ACTION_LABELS
+
+    def test_prune_actions_not_schedule_targets(self, p):
+        # Prune isn't offered in the schedule dropdown (like cleanup); the
+        # prune-on-rescan toggle covers scheduled pruning instead.
+        targets = p._valid_schedule_targets()
+        assert "prune_movies" not in targets
+        assert "prune_series" not in targets
+
+    def test_prune_stat_keys_are_in_webhook_labels(self, p):
+        # The counts prune emits must be renderable by the webhook summary.
+        labelled = {key for key, _label in p._WEBHOOK_STAT_LABELS}
+        for key in ("deleted_strm", "deleted_nfo", "removed_dirs", "preserved_dirs"):
+            assert key in labelled
